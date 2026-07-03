@@ -81,6 +81,20 @@ static void kernel_map_2m(uint64_t addr, uint64_t extra_flags) {
     mapped_2m_pages++;
 }
 
+/* ──────── Kernel MMIO mapping (post-init device windows) ──────── */
+void paging_kernel_map_mmio(uint64_t phys, uint64_t size) {
+    uint64_t base = phys & ~(uint64_t)(PAGE_SIZE_2M - 1);
+    uint64_t end  = phys + size;
+    for (uint64_t addr = base; addr < end; addr += PAGE_SIZE_2M) {
+        kernel_map_2m(addr, PTE_CACHE_DIS);
+    }
+    /* Full TLB flush: user PML4s share the kernel tables, and the
+     * region may previously have been non-present */
+    uint64_t cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(cr3));
+    asm volatile("mov %0, %%cr3" :: "r"(cr3) : "memory");
+}
+
 /* ──────── Page Fault Handler (ISR 14) ──────── */
 static void page_fault_handler(registers_t* regs) {
     uint64_t faulting_addr = read_cr2();

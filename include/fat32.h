@@ -33,4 +33,8 @@ vfs_node_t* fat32_get_root(void);
 int fat32_save(const char* name, const uint8_t* data, uint32_t len);
 int fat32_load(const char* name, uint8_t* out, uint32_t maxlen);
 
+/* Nonzero while a save/load operation is in flight (single-CPU guard
+ * used by the kernel log flusher to avoid interleaved volume writes). */
+int fat32_busy(void);
+
 #endif /* FAT32_H */

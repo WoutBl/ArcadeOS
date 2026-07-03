@@ -36,6 +36,7 @@
 #define SYS_READDIR     26   /* EBX = path, ECX = index, EDX = dirent_info_t* out */
 #define SYS_SAVE        27   /* EBX = filename, ECX = buf, EDX = len (whole-file write) */
 #define SYS_LOAD        28   /* EBX = filename, ECX = buf, EDX = maxlen; returns bytes */
+#define SYS_SOUND       29   /* EBX = freq Hz (0 = stop), ECX = duration ms */
 
 /* GDT segment selectors */
 #define GDT_KERNEL_CODE  0x08

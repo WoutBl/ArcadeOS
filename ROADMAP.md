@@ -23,16 +23,19 @@ audio, no networking, xHCI is a stub, no real hardware testing yet.
    with -mno-red-zone/-mno-sse for the kernel. Verified in QEMU: launcher,
    Snake, Breakout, high-score save to FAT32, crash-safe quit-to-launcher.
 
-3. **AHCI driver.** `ata.c` today is legacy PATA PIO, which won't see disks
-   on real hardware at all. Need this before storage/save-data work means
-   anything outside QEMU.
+3. ~~**AHCI driver.**~~ **DONE (July 2026).** Polled AHCI driver
+   (`src/ahci.c`) + a disk dispatch layer (`src/disk.c`) that prefers AHCI
+   and falls back to the legacy ATA PIO driver. QEMU now attaches the game
+   volume over AHCI by default (`make run`); `make run-ide` keeps the PIO
+   path honest. This was the real-hardware blocker for storage.
 
-4. **Logging, done properly.** Always write logs to both a file on disk
-   *and* serial — not one or the other, always both, so I never lose a boot
-   log because I forgot to redirect the right thing. Later, once there's a
-   NIC driver (see networking below), add a REST/TCP endpoint so I can
-   stream logs over Ethernet/Wi-Fi instead of pulling a file off disk or
-   tailing a serial cable.
+4. ~~**Logging, done properly.**~~ **DONE (July 2026) — file + serial
+   half.** Every character that reaches the serial mirror also lands in a
+   32 KiB ring buffer that the idle task flushes to `KERNEL.LOG` on the
+   game volume every ~2 s — so real hardware keeps a boot log on disk even
+   with no serial cable attached. Still to do later: the REST/TCP log
+   streaming endpoint, which needs the NIC driver first (see networking
+   below).
 
 ## Also on the list
 

@@ -24,6 +24,7 @@
 #include "usb.h"
 #include "console_abi.h"
 #include "fat32.h"
+#include "audio.h"
 
 /* ──────── The global TSS ──────── */
 tss_t kernel_tss;
@@ -592,6 +593,13 @@ static void syscall_handler(registers_t* regs) {
             if (!name || !buf) { regs->eax = (uint32_t)-1; break; }
 
             regs->eax = (uint32_t)fat32_load(name, buf, maxlen);
+            break;
+        }
+
+        case SYS_SOUND: {
+            /* EBX = frequency in Hz (0 stops playback), ECX = duration ms */
+            audio_tone((uint32_t)regs->ebx, (uint32_t)regs->ecx);
+            regs->eax = 0;
             break;
         }
 

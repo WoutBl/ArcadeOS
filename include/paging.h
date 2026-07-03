@@ -29,6 +29,11 @@ void paging_dump_info(void);
 /* Accessor for the master kernel PML4 */
 uint64_t* paging_get_kernel_pd(void);
 
+/* Identity-map a 2 MiB-aligned MMIO region into the kernel hierarchy
+ * (cache-disabled). Used for device register windows discovered after
+ * paging_init(), e.g. the AHCI ABAR. */
+void paging_kernel_map_mmio(uint64_t phys, uint64_t size);
+
 /* Map a 4 KiB page into a specific process PML4 (used by the loader).
  * Descends the 4-level hierarchy, privately copying any table still
  * shared with the kernel, and replaces 2 MiB kernel identity mappings

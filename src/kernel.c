@@ -29,7 +29,9 @@
 #include "task.h"
 #include "scheduler.h"
 #include "syscall.h"
-#include "ata.h"
+#include "disk.h"
+#include "klog.h"
+#include "audio.h"
 #include "fs.h"
 #include "fat32.h"
 #include "pci.h"
@@ -47,6 +49,7 @@
  */
 static void idle_task(void) {
     while (1) {
+        klog_idle_flush();        /* Persist the kernel log (throttled) */
         asm volatile("sti\nhlt"); /* Enable IRQs, then sleep */
     }
 }
@@ -172,8 +175,11 @@ void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
     tss_init(kernel_stack_top);
     syscall_init();
 
-    /* 16. Storage: ATA disk → FAT32 game volume at /games */
-    if (ata_init()) {
+    /* 16. Audio: AC97 PCM out, PC speaker fallback (needs the PCI scan) */
+    audio_init();
+
+    /* 17. Storage: AHCI (SATA) or legacy ATA → FAT32 game volume at /games */
+    if (disk_init()) {
         if (fat32_init()) {
             vfs_mount("/games", fat32_get_root());
         }

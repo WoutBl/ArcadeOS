@@ -41,8 +41,9 @@ TSS-based Ring 3 support, int 0x80 syscalls, VFS + devfs, and ATA PIO.
 | Boot console | `vga.c` | The classic terminal API now renders glyphs onto the framebuffer (VGA text fallback kept); all output mirrored to COM1 (`serial.c`) |
 | Controllers | `gamepad.c` | Merges sources into 4 logical pads; pad 0 is keyboard-mapped; press-edge latching so slow frame loops never miss a tap |
 | USB host | `pci.c`, `usb.c`, `uhci.c`, `xhci.c` | Full UHCI transfer engine: frame list + QH/TD schedule, synchronous control transfers (enumeration: GET_DESCRIPTOR / SET_ADDRESS / SET_CONFIGURATION), polled interrupt IN pipes for HID reports; DualShock 4 reports decoded in `usb.c` and merged into pad 0; xHCI remains an architectural stub |
-| Storage | `fat32.c` | FAT32 (8.3 names) over ATA PIO, mounted at `/games`; write path (cluster alloc, FAT mirroring, directory updates) backs the save-data API |
+| Storage | `ahci.c`, `ata.c`, `disk.c`, `fat32.c` | AHCI (SATA) driver preferred — what real hardware exposes — with legacy ATA PIO as fallback, dispatched through `disk.c`; FAT32 (8.3 names) mounted at `/games`; write path (cluster alloc, FAT mirroring, directory updates) backs the save-data API |
 | Save data | `fat32.c`, `syscall.c` | "Memory card" semantics: whole-file `SYS_SAVE`/`SYS_LOAD` on the game volume; games persist high scores across power cycles |
+| Kernel log | `klog.c`, `serial.c` | Everything mirrored to COM1 also lands in a 32 KiB ring buffer, flushed to `KERNEL.LOG` on the game volume by the idle task (~2 s cadence) — boot logs survive on disk even without a serial cable |
 | Game loading | `loader.c` | ELF loaded via VFS into a fresh page directory, 16 KiB user stack, Ring 3 entry via iret |
 | Crash safety | `paging.c` | A Ring 3 page fault kills the game and returns to the launcher instead of panicking the console |
 
@@ -68,8 +69,9 @@ Prerequisites (macOS): `brew install nasm x86_64-elf-gcc qemu`
 
 ```sh
 make            # bootloader + kernel + arcadeos.img (bootable FAT32 volume)
-make run        # boot in QEMU with a window
+make run        # boot in QEMU with a window (disk attached via AHCI)
 make run-headless   # headless: serial.log + qemu-monitor.sock
+make run-ide        # headless, disk on legacy IDE (tests the ATA PIO fallback)
 ```
 
 `tools/mkfat32.py` builds a single self-booting image: the two bootloader

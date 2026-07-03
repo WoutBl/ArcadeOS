@@ -41,7 +41,7 @@ STAGE2 = $(BUILD)/stage2.bin
 # Kernel source files
 C_SOURCES = src/kernel.c src/vga.c src/serial.c src/fb.c src/console_gfx.c \
             src/keyboard.c src/gamepad.c src/pci.c src/usb.c src/uhci.c src/xhci.c \
-            src/ata.c src/fat32.c src/fs.c src/clock.c src/heap.c src/idt.c \
+            src/ata.c src/ahci.c src/disk.c src/klog.c src/fat32.c src/fs.c src/clock.c src/heap.c src/idt.c \
             src/string.c src/pmm.c src/paging.c src/task.c src/scheduler.c \
             src/syscall.c src/loader.c src/elf.c src/vfs.c src/devfs.c src/pipe.c
 
@@ -117,7 +117,9 @@ $(DISK): $(STAGE1) $(STAGE2) $(KERNEL) $(APPS) tools/mkfat32.py
 # Run in QEMU with a visible window
 run: $(DISK)
 	qemu-system-x86_64 -m 128 \
-		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
+		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
+		-device ahci,id=ahci0 \
+		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
 		-boot c -usb \
 		-serial file:serial.log \
 		-no-reboot
@@ -129,7 +131,9 @@ run: $(DISK)
 # While the VM runs, macOS loses the controller; unplug/replug returns it.
 run-ds4: $(DISK)
 	qemu-system-x86_64 -m 128 \
-		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
+		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
+		-device ahci,id=ahci0 \
+		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
 		-boot c -usb \
 		-device usb-host,vendorid=0x054c,productid=0x09cc \
 		-serial file:serial.log \
@@ -137,6 +141,18 @@ run-ds4: $(DISK)
 
 # Run headless: serial log + QEMU monitor socket (for screendump/sendkey)
 run-headless: $(DISK)
+	qemu-system-x86_64 -m 128 \
+		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
+		-device ahci,id=ahci0 \
+		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
+		-boot c -usb \
+		-serial file:serial.log \
+		-display none \
+		-monitor unix:qemu-monitor.sock,server,nowait \
+		-no-reboot
+
+# Legacy IDE attach: exercises the ATA PIO fallback path
+run-ide: $(DISK)
 	qemu-system-x86_64 -m 128 \
 		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
 		-boot c -usb \
@@ -155,4 +171,4 @@ clean-all: clean
 	rm -f $(DISK)
 
 # Phony targets
-.PHONY: all run run-ds4 run-headless clean clean-all
+.PHONY: all run run-ds4 run-headless run-ide clean clean-all

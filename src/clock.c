@@ -6,6 +6,7 @@
 #include "idt.h"
 #include "vga.h"
 #include "scheduler.h"
+#include "audio.h"
 
 /* ──────── Time state ──────── */
 volatile uint32_t system_ticks = 0;
@@ -21,6 +22,9 @@ uint32_t current_year    = 2025;
 static void pit_irq_handler(registers_t* regs) {
     (void)regs;
     system_ticks++;
+
+    /* Auto-stop expired PC speaker tones */
+    audio_tick();
 
     /* Call the scheduler tick (preemptive multitasking) */
     scheduler_tick();

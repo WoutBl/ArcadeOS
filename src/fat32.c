@@ -8,7 +8,7 @@
  */
 
 #include "fat32.h"
-#include "ata.h"
+#include "disk.h"
 #include "vga.h"
 #include "heap.h"
 
@@ -103,7 +103,7 @@ static uint32_t fat_next_cluster(uint32_t cluster) {
     uint32_t entry_off  = fat_offset % DISK_SECTOR_SIZE;
 
     if (lba != fat_cache_lba) {
-        if (!ata_read_sector(lba, fat_cache)) return FAT32_EOC;
+        if (!disk_read_sector(lba, fat_cache)) return FAT32_EOC;
         fat_cache_lba = lba;
     }
     uint32_t value;
@@ -172,7 +172,7 @@ static int fat32_iterate_dir(uint32_t dir_cluster, dirent_visitor_t visit, void*
         uint32_t lba = cluster_to_lba(cluster);
 
         for (uint32_t s = 0; s < sectors_per_cluster; s++) {
-            if (!ata_read_sector(lba + s, sector_buf)) return 0;
+            if (!disk_read_sector(lba + s, sector_buf)) return 0;
 
             fat32_dirent_t* entries = (fat32_dirent_t*)sector_buf;
             for (uint32_t e = 0; e < DISK_SECTOR_SIZE / sizeof(fat32_dirent_t); e++) {
@@ -215,7 +215,7 @@ static int32_t fat32_vfs_read(vfs_node_t* node, uint32_t offset, uint32_t size, 
         for (uint32_t s = cluster_off / DISK_SECTOR_SIZE;
              s < sectors_per_cluster && copied < size; s++) {
 
-            if (!ata_read_sector(lba + s, sector_buf)) return (int32_t)copied;
+            if (!disk_read_sector(lba + s, sector_buf)) return (int32_t)copied;
 
             uint32_t sec_off = (copied == 0) ? (cluster_off % DISK_SECTOR_SIZE) : 0;
             uint32_t avail   = DISK_SECTOR_SIZE - sec_off;
@@ -316,14 +316,14 @@ vfs_node_t* fat32_get_root(void) {
 int fat32_init(void) {
     fat_present = 0;
 
-    if (!ata_is_present()) {
+    if (!disk_is_present()) {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_BROWN, VGA_COLOR_BLACK));
         terminal_writestring("[FAT32] No disk - game volume unavailable\n");
         return 0;
     }
 
     static uint8_t bpb_buf[DISK_SECTOR_SIZE];
-    if (!ata_read_sector(0, bpb_buf)) {
+    if (!disk_read_sector(0, bpb_buf)) {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
         terminal_writestring("[FAT32] Failed to read boot sector\n");
         return 0;
@@ -384,7 +384,7 @@ static int fat_set(uint32_t cluster, uint32_t value) {
     uint32_t lba0       = fat_start_lba + sec_idx;
 
     if (lba0 != fat_cache_lba) {
-        if (!ata_read_sector(lba0, fat_cache)) return 0;
+        if (!disk_read_sector(lba0, fat_cache)) return 0;
         fat_cache_lba = lba0;
     }
 
@@ -394,7 +394,7 @@ static int fat_set(uint32_t cluster, uint32_t value) {
     memcpy(&fat_cache[entry_off], &cur, 4);
 
     for (uint32_t f = 0; f < num_fats; f++) {
-        if (!ata_write_sector(fat_start_lba + f * fat_size_sectors + sec_idx, fat_cache))
+        if (!disk_write_sector(fat_start_lba + f * fat_size_sectors + sec_idx, fat_cache))
             return 0;
     }
     return 1;
@@ -440,7 +440,7 @@ static int root_dir_locate(int mode, const char* name, dirent_loc_t* loc) {
         uint32_t lba = cluster_to_lba(cluster);
 
         for (uint32_t sec = 0; sec < sectors_per_cluster; sec++) {
-            if (!ata_read_sector(lba + sec, sector_buf)) return 0;
+            if (!disk_read_sector(lba + sec, sector_buf)) return 0;
 
             fat32_dirent_t* entries = (fat32_dirent_t*)sector_buf;
             for (uint32_t e = 0; e < DISK_SECTOR_SIZE / sizeof(fat32_dirent_t); e++) {
@@ -477,10 +477,10 @@ static int root_dir_locate(int mode, const char* name, dirent_loc_t* loc) {
 
 /* Write an updated directory entry back to disk */
 static int dirent_writeback(const dirent_loc_t* loc) {
-    if (!ata_read_sector(loc->lba, sector_buf)) return 0;
+    if (!disk_read_sector(loc->lba, sector_buf)) return 0;
     memcpy(sector_buf + loc->index * sizeof(fat32_dirent_t), &loc->de,
            sizeof(fat32_dirent_t));
-    return ata_write_sector(loc->lba, sector_buf);
+    return disk_write_sector(loc->lba, sector_buf);
 }
 
 /* ──────── Public save/load API (backs SYS_SAVE / SYS_LOAD) ──────── */
@@ -492,7 +492,7 @@ static void save_fail(const char* why) {
     terminal_writestring("\n");
 }
 
-int fat32_save(const char* name, const uint8_t* data, uint32_t len) {
+static int fat32_save_impl(const char* name, const uint8_t* data, uint32_t len) {
     if (!fat_present || !name || (!data && len > 0)) { save_fail("args"); return -1; }
 
     /* Find the file, or create a fresh entry in a free root-dir slot */
@@ -534,7 +534,7 @@ int fat32_save(const char* name, const uint8_t* data, uint32_t len) {
                 if (n > DISK_SECTOR_SIZE) n = DISK_SECTOR_SIZE;
                 memcpy(sector_buf, data + off, n);
             }
-            if (!ata_write_sector(cluster_to_lba(c) + sec, sector_buf)) {
+            if (!disk_write_sector(cluster_to_lba(c) + sec, sector_buf)) {
                 fat_free_chain(first_cluster);
                 save_fail("data write");
                 return -1;
@@ -548,11 +548,11 @@ int fat32_save(const char* name, const uint8_t* data, uint32_t len) {
     loc.de.size = len;
     if (!dirent_writeback(&loc)) { save_fail("dirent writeback"); return -1; }
 
-    ata_flush();
+    disk_flush();
     return 0;
 }
 
-int fat32_load(const char* name, uint8_t* out, uint32_t maxlen) {
+static int fat32_load_impl(const char* name, uint8_t* out, uint32_t maxlen) {
     if (!fat_present || !name || !out) return -1;
 
     dirent_loc_t loc;
@@ -567,4 +567,30 @@ int fat32_load(const char* name, uint8_t* out, uint32_t maxlen) {
     tmp.inode  = ((uint32_t)loc.de.first_cluster_high << 16) | loc.de.first_cluster_low;
     tmp.length = loc.de.size;
     return fat32_vfs_read(&tmp, 0, size, out);
+}
+
+/*
+ * ──────── Concurrency guard ────────
+ *
+ * fat32_busy() lets the kernel log flusher (which runs from the idle
+ * task) avoid interleaving its whole-file write with a game's SYS_SAVE /
+ * SYS_LOAD that was preempted mid-operation. Single CPU: the counter is
+ * only ever observed under cli(), so a plain int is enough.
+ */
+static int fat32_op_depth = 0;
+
+int fat32_busy(void) { return fat32_op_depth != 0; }
+
+int fat32_save(const char* name, const uint8_t* data, uint32_t len) {
+    fat32_op_depth++;
+    int r = fat32_save_impl(name, data, len);
+    fat32_op_depth--;
+    return r;
+}
+
+int fat32_load(const char* name, uint8_t* out, uint32_t maxlen) {
+    fat32_op_depth++;
+    int r = fat32_load_impl(name, out, maxlen);
+    fat32_op_depth--;
+    return r;
 }

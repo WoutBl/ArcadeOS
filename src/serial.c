@@ -6,6 +6,7 @@
  */
 
 #include "serial.h"
+#include "klog.h"
 
 static int serial_ready = 0;
 
@@ -26,6 +27,7 @@ static int serial_tx_empty(void) {
 
 void serial_putc(char c) {
     if (!serial_ready) return;
+    klog_putc(c);               /* Mirror into the on-disk kernel log */
     if (c == '\n') serial_putc('\r');
 
     uint32_t timeout = 100000;
