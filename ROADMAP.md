@@ -54,11 +54,15 @@ audio, no networking, xHCI is a stub, no real hardware testing yet.
   realistic for a hobby OS; the better use of time is double-buffered page
   flipping and not hardcoding a single 640x480 mode.
 
-- **Game engine + SDK.** Formalize sprite/entity management, a fixed
-  timestep loop helper, and input/save helpers into a real internal library
-  instead of every game hand-rolling raw syscalls. Package it as something
-  I can actually hand to myself (or someone else) as an SDK with a template
-  for starting a new game.
+- ~~**Game engine + SDK.**~~ **DONE (July 2026) — first version.**
+  `libarcade` (sdk/arcade.h + sdk/arcade.c): fixed-timestep loop, input
+  edge detection, fixed-point math, color-keyed sprites, entities with
+  AABB collision, save slots, canned SFX, and a PRNG — documented in
+  sdk/README.md with a copy-paste template. STARCATCH (apps/demo.c) is
+  the reference game, using every feature in under 200 lines. Existing
+  games still run on raw libc; new games should use the SDK. Later:
+  port the old games over, PCM sample/mixing audio API, and asset
+  pipeline once the PC-side editor idea gets its design pass.
 
 - **PC-side game editor / dev tool (far future, sketchy idea).** Build an
   editor that runs on a normal PC (not on ArcadeOS itself) for putting

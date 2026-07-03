@@ -65,6 +65,14 @@ TSS-based Ring 3 support, int 0x80 syscalls, VFS + devfs, and ATA PIO.
 User-space API: `libc/console.h` (syscall wrappers + software drawing helpers).
 Shared ABI structs: `include/console_abi.h`.
 
+### Game SDK
+
+New games are written against **libarcade** ([sdk/arcade.h](sdk/arcade.h),
+docs in [sdk/README.md](sdk/README.md)): a fixed-timestep game loop, input
+edge detection, fixed-point math, sprites, entities with AABB collision,
+save slots, canned sound effects, and a PRNG. `apps/demo.c` (STARCATCH)
+is the reference game — every SDK feature in under 200 lines.
+
 ## Building
 
 Prerequisites (macOS): `brew install nasm x86_64-elf-gcc qemu`
@@ -140,6 +148,8 @@ product id in the Makefile for a v1 pad (0x05C4).
 - `apps/pong.c` – reference title: pad input + fixed-point physics + present
 - `apps/snake.c` – grid movement, screen wrapping, persistent high score
 - `apps/breakout.c` – brick grid sized from `gfx_info`, persistent high score
+- `apps/demo.c` – STARCATCH, the SDK reference game (sprites, entities,
+  collision, save slots — all through `sdk/arcade.h`)
 
 Games persist data with `save_data("NAME.SAV", &blob, len)` /
 `load_data(...)` from `libc/console.h` — whole-file reads/writes of 8.3-named
