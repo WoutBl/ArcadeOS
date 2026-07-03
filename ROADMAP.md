@@ -1,137 +1,85 @@
 # ArcadeOS Roadmap
 
-Current state: bare-metal x86, GRUB multiboot into a 640x480x32 LFB, Ring-3
-launcher + ELF games (Pong/Snake/Breakout), UHCI USB (keyboard + DualShock 4
-merged into pad 0), FAT32-over-ATA-PIO save data, all validated in QEMU
-(`make run` / `make run-headless`). No audio, no networking, xHCI is a stub,
-never booted on real hardware.
+My plan for where this goes next. I've got a bare-metal x86 console booting
+via GRUB multiboot into a 640x480x32 framebuffer, a Ring-3 launcher + ELF
+games (Pong/Snake/Breakout), UHCI USB (keyboard + DualShock 4 merged into pad
+0), and FAT32-over-ATA-PIO save data — all only ever run in QEMU so far. No
+audio, no networking, xHCI is a stub, no real hardware testing yet.
 
-## Tier 0 — Real hardware bring-up
+## Up next
 
-Everything so far has only run in QEMU. Flashing a real PC is its own project
-because several subsystems were only ever exercised against emulated devices.
+1. **Write my own bootloader.** Drop the GRUB multiboot dependency and boot
+   the kernel myself. This is also the natural place to stop relying on
+   GRUB's BIOS-era assumptions before I go further with hardware.
 
-- **Bootable media** — `dd`/Rufus the `.iso` to a USB stick. GRUB multiboot
-  needs legacy BIOS (or CSM) boot; most modern PCs default to UEFI-only, so
-  this may require picking older/BIOS-mode hardware or adding UEFI boot
-  support (GRUB can chainload multiboot under UEFI, but it's untested here).
-- **Keyboard** — `keyboard.c` drives PS/2 IRQ1; confirm this still works on
-  a PC with only USB keyboards (no PS/2 port) — may need USB HID boot
-  keyboard support in `usb.c`, not just the DS4 report parser.
-- **Controller** — DS4 currently only validated via QEMU `-device usb-host`
-  with `sudo` (macOS HID driver seizure workaround). Real hardware won't have
-  that host-OS conflict, but UHCI-only support means USB3-only ports/hubs may
-  not enumerate the pad at all — ties into the xHCI item below.
-- **Screen** — `fb.c` requests a fixed 640x480x32 mode via multiboot video
-  fields. Real graphics cards won't all honor that mode/resolution the same
-  way QEMU's stdvga does; need a fallback path (query available VBE modes,
-  pick nearest match) instead of assuming the request always succeeds.
-- **Audio** — depends on Tier 1 existing at all; then needs a driver for
-  whatever's actually on the board (see GPU/audio hardware notes below).
-- **Disk** — `ata.c` is legacy PATA PIO. Most PCs built in the last ~15 years
-  expose disks via AHCI, not legacy IDE, even with CSM/legacy boot enabled.
-  This likely needs a real AHCI driver before save data works on real
-  hardware at all (see Tier 4).
-- **No serial console on real hardware** — `serial.log`-based debugging goes
-  away without a debug UART/cable. Worth an on-screen panic/debug overlay
-  (crash reason, register dump) since there's no headless fallback once it's
-  not running under QEMU.
+2. **Move off 32-bit, onto 64-bit (long mode).** I don't think plain 32-bit
+   is a safe bet for modern PCs going forward, so I want the kernel running
+   in long mode. (Worth noting for myself: x86-64 CPUs still execute 32-bit
+   protected mode in hardware just fine — the real risk to plain 32-bit on
+   real hardware is newer boards going UEFI-only with no BIOS/CSM fallback,
+   which is more about the bootloader than the CPU mode. Doesn't change the
+   plan, just means the bootloader rewrite and the 64-bit move are really
+   the same piece of work: new GDT/segments, 4-level paging instead of the
+   current 2-level scheme, toolchain switch to x86_64-elf-gcc, ELF64
+   loading, and a syscall ABI update since arg-passing registers change.)
 
-## Tier 1 — Audio
+3. **AHCI driver.** `ata.c` today is legacy PATA PIO, which won't see disks
+   on real hardware at all. Need this before storage/save-data work means
+   anything outside QEMU.
 
-Biggest missing subsystem overall, and a prerequisite for a lot of "feels
-like a real console" work (rhythm games, feedback SFX, etc).
+4. **Logging, done properly.** Always write logs to both a file on disk
+   *and* serial — not one or the other, always both, so I never lose a boot
+   log because I forgot to redirect the right thing. Later, once there's a
+   NIC driver (see networking below), add a REST/TCP endpoint so I can
+   stream logs over Ethernet/Wi-Fi instead of pulling a file off disk or
+   tailing a serial cable.
 
-- PC speaker square-wave beeps first (cheap, no new hardware driver, works
-  in QEMU and on basically any real PC).
-- Real backend next: AC97 (older, simpler, well-supported in QEMU) vs. Intel
-  HDA (what most real motherboards built after ~2005 actually have — needed
-  for Tier 0 real-hardware audio to work at all). Likely want both: AC97 for
-  QEMU dev loop, HDA for real hardware.
-- `SYS_AUDIO_PLAY`-style syscall + small mixer so games can layer SFX over
-  music without hand-rolling PCM mixing per game.
+## Also on the list
 
-## Tier 2 — Graphics / GPU
+- **Audio.** Still the biggest missing subsystem for anything that's
+  supposed to feel like a console. PC speaker beep first (cheap, works
+  everywhere), then a real backend — AC97 for QEMU, Intel HDA for whatever
+  actually ends up on real hardware.
 
-- Today's renderer is a full software blit onto a VBE/multiboot linear
-  framebuffer — that *is* "using the graphics card," just in its dumbest
-  mode (no 2D/3D acceleration, no vendor driver). A real Intel/AMD/Nvidia
-  accelerated driver is out of scope for a hobby OS (thousands of hours of
-  vendor-specific reverse engineering); the realistic path is staying on
-  VBE/VESA (or generic UEFI GOP on real hardware) and optimizing the
-  *software* path instead.
-- Double-buffered page flipping instead of a full blit on every
-  `gfx_present_buffer()` call, to fix tearing/timing under real display
-  refresh rates (not just QEMU TCG frame pacing).
-- Mode negotiation (list available VBE modes, don't hardcode 640x480) — ties
-  directly into the Tier 0 real-hardware screen item.
+- **Graphics/GPU.** What I have today already renders through the
+  framebuffer the graphics card exposes (VBE/LFB) — it's just unaccelerated
+  software rendering. A real vendor 2D/3D driver (Intel/AMD/Nvidia) is not
+  realistic for a hobby OS; the better use of time is double-buffered page
+  flipping and not hardcoding a single 640x480 mode.
 
-## Tier 3 — Game engine + SDK
+- **Game engine + SDK.** Formalize sprite/entity management, a fixed
+  timestep loop helper, and input/save helpers into a real internal library
+  instead of every game hand-rolling raw syscalls. Package it as something
+  I can actually hand to myself (or someone else) as an SDK with a template
+  for starting a new game.
 
-Right now games are ELFs linked against `libc/console.h` calling raw
-syscalls directly. Worth formalizing into a real internal engine + public
-SDK so new games (yours or others') don't each reinvent sprite/input/save
-boilerplate:
+- **PC-side game editor / dev tool (far future, sketchy idea).** Build an
+  editor that runs on a normal PC (not on ArcadeOS itself) for putting
+  together a game — levels, sprites, whatever — using the SDK above, then
+  export it onto removable media (SD card or similar) and have the console
+  pick it up the way it already lists `*.ELF` files off the FAT32 volume.
+  Not sure yet exactly how the console-side detection/mounting would work
+  (whether it's a second FAT volume, a USB mass-storage read, etc.) — this
+  needs its own design pass once the SDK itself exists.
 
-- Engine layer: sprite/entity management, fixed-timestep game loop helper,
-  input abstraction over `pad_state_t` (edge/hold/repeat helpers), save-slot
-  helpers on top of `SYS_SAVE`/`SYS_LOAD`.
-- SDK packaging: a documented header + static lib (`libarcade.a`?) separate
-  from the OS-internal `libc/`, plus a "new game" template/skeleton
-  (Makefile target, minimal main loop) so starting a new title is
-  copy-a-template rather than reading existing games' source.
-- Once the SDK exists, DS4 rumble output (per the note below) and audio
-  (Tier 1) should be exposed through it, not just raw syscalls.
-- DualShock 4 rumble/LED output — input decoding already exists in
-  `src/usb.c`; adding the output report is a small, high-payoff extension of
-  code that already works.
+- **New game.** Once the SDK exists, build something that actually exercises
+  analog sticks and multiple pads, not just a single-screen single-pad game
+  like the current three — a twin-stick shooter or a rhythm game (which also
+  gives audio a reason to exist) are the strongest candidates.
 
-## Tier 4 — Storage / save data
+- **Launcher polish.** Box art, categories, recently-played — worth doing
+  once there are more than 3-4 games to look at.
 
-- **AHCI/SATA driver** — needed for real hardware (see Tier 0); `ata.c`
-  legacy PIO likely won't see most real disks at all.
-- Save game state to whatever's actually connected on real hardware (SSD/HDD
-  via AHCI) instead of only the emulated FAT32 game volume — may mean a
-  separate writable partition/volume distinct from the read-mostly game
-  volume the launcher boots from.
-- Multiple save slots per game, directory-based instead of one flat 8.3 file
-  per title (current limit: whole-file, 64 KiB max, single slot).
-- Settings persistence (theme, control remapping) using the same save path,
-  since `SYS_THEME` exists but nothing currently persists it across reboots.
+- **Networking (stretch).** A NIC driver (rtl8139 in QEMU to start) mainly
+  to unlock the remote-logging item above and, longer-term, shared
+  high-score sync. Comes after the core stuff above is solid.
 
-## Tier 5 — New game
+## Not right now
 
-A good next title should stress the engine/SDK (Tier 3) harder than
-Pong/Snake/Breakout do — those are all single-screen, single-pad, no-audio.
-Options, roughly in order of how much they'd exercise new subsystems:
-
-- **Twin-stick shooter** — exercises analog stick input (DS4 sticks already
-  decoded but unused by existing games), multiple simultaneous sprites, and
-  is a natural first user of the audio SFX API.
-- **Simple rhythm game** — directly motivates and validates the audio
-  subsystem (Tier 1) rather than treating sound as an afterthought.
-- **Local 2-player mode** (Pong or a new title) — pad 0-3 merging already
-  exists in `gamepad.c` but has never been exercised by an actual 2-controller
-  game.
-
-## Tier 6 — Launcher / UX polish
-
-- Box-art thumbnails (sprite rendering already supports alpha-keyed images),
-  categories/sorting, "recently played" — more valuable once there are 4-5+
-  titles instead of 3.
-
-## Tier 7 — Stretch: networking
-
-- Minimal NIC driver (rtl8139 is well-supported in QEMU) purely for a shared
-  high-score/leaderboard sync. Large scope jump relative to everything else
-  here — only worth it once the console-like core (audio, real hardware,
-  SDK) is solid.
-
-## Suggested order
-
-Tier 0 (real hardware) and Tier 1 (audio) are the two biggest gaps and don't
-block each other — could run in parallel. Tier 3 (engine/SDK) is worth doing
-before Tier 5 (new game) so the new title is built on the SDK instead of
-copy-pasting an existing game's raw-syscall style. Tier 4's AHCI driver is a
-hard dependency of "save to real disk" specifically, not of Tier 0 broadly
-(QEMU's `run`/`run-headless` targets keep working on `ata.c` either way).
+- **Real hardware bring-up** (flashing an actual PC, checking keyboard,
+  controller, screen, audio all work outside QEMU). I know this is on the
+  list eventually — boot media, PS/2-vs-USB-only keyboards, DS4 over
+  UHCI-only ports, VBE mode fallback, no-serial debugging on real hardware —
+  but I'm parking it for later. Most of the "up next" items (bootloader,
+  64-bit, AHCI) are exactly the prerequisites that make this worth
+  attempting when I do get to it.
