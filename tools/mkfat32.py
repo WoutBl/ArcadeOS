@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-ArcadeOS - FAT32 game volume builder.
+ArcadeOS - bootable FAT32 game volume builder.
 
 Creates a FAT32 "superfloppy" (BPB at LBA 0, no MBR) and copies the given
 files into the root directory using 8.3 short names. This is the volume
 the ArcadeOS fat32.c driver mounts at /games.
 
-Usage: python3 mkfat32.py <image.img> <size_mb> <file1> [file2 ...]
+The volume is also the boot disk: stage 1 (the VBR boot code around the
+BPB) lives in sector 0, and stage 2 + the kernel flat binary are stored
+in the reserved-sector region (stage 2 at LBA 8, kernel right after).
+Stage 1 carries two patch fields: kernel sector count at offset 504
+(dword) and stage 2 sector count at offset 508 (word).
+
+Usage: python3 mkfat32.py <image.img> <size_mb> <stage1.bin> <stage2.bin> \
+                          <kernel.bin> <file1> [file2 ...]
 """
 
 import struct
@@ -15,8 +22,9 @@ import os
 
 SECTOR = 512
 SPC = 8                      # sectors per cluster (4 KiB clusters)
-RESERVED = 32                # reserved sectors (BPB, FSInfo, backup boot)
+RESERVED = 2048              # reserved sectors (boot code + stage2 + kernel)
 NUM_FATS = 2
+STAGE2_LBA = 8               # sectors 0-7: VBR, FSInfo, backup boot
 
 
 def short_name(filename):
@@ -32,13 +40,34 @@ def short_name(filename):
 
 
 def main():
-    if len(sys.argv) < 4:
+    if len(sys.argv) < 6:
         print(__doc__)
         sys.exit(1)
 
     img_path = sys.argv[1]
     size_mb = int(sys.argv[2])
-    files = sys.argv[3:]
+    stage1_path, stage2_path, kernel_path = sys.argv[3:6]
+    files = sys.argv[6:]
+
+    with open(stage1_path, "rb") as f:
+        stage1 = f.read()
+    with open(stage2_path, "rb") as f:
+        stage2 = f.read()
+    with open(kernel_path, "rb") as f:
+        kernel = f.read()
+
+    if len(stage1) != SECTOR:
+        print(f"mkfat32: ERROR: {stage1_path} must be exactly 512 bytes")
+        sys.exit(1)
+
+    stage2_sectors = (len(stage2) + SECTOR - 1) // SECTOR
+    kernel_sectors = (len(kernel) + SECTOR - 1) // SECTOR
+    kernel_lba = STAGE2_LBA + stage2_sectors
+    if kernel_lba + kernel_sectors > RESERVED:
+        print(f"mkfat32: ERROR: boot code + kernel "
+              f"({kernel_lba + kernel_sectors} sectors) exceed the "
+              f"{RESERVED} reserved sectors")
+        sys.exit(1)
 
     total_sectors = size_mb * 1024 * 1024 // SECTOR
 
@@ -81,6 +110,12 @@ def main():
     struct.pack_into("<I", bpb, 67, 0xA2CADE05)       # volume id
     bpb[71:82] = b"ARCADEOS   "                       # volume label (11 bytes exact)
     bpb[82:90] = b"FAT32   "                         # fs type
+
+    # Stage-1 boot code around the BPB (offsets 0x5A..503); the jmp at
+    # offset 0 (EB 58 90) already lands on it. Patch fields at 504/508.
+    bpb[0x5A:504] = stage1[0x5A:504]
+    struct.pack_into("<I", bpb, 504, kernel_sectors)  # dword: kernel sectors
+    struct.pack_into("<H", bpb, 508, stage2_sectors)  # word: stage2 sectors
     bpb[510] = 0x55
     bpb[511] = 0xAA
 
@@ -144,6 +179,12 @@ def main():
         f.seek(6 * SECTOR)
         f.write(bpb)                                  # backup boot sector
 
+        # Bootloader stage 2 + kernel in the reserved-sector region
+        f.seek(STAGE2_LBA * SECTOR)
+        f.write(stage2)
+        f.seek(kernel_lba * SECTOR)
+        f.write(kernel)
+
         fat_bytes = struct.pack(f"<{len(fat)}I", *fat)
         for i in range(NUM_FATS):
             f.seek((RESERVED + i * fat_size) * SECTOR)
@@ -162,7 +203,9 @@ def main():
             f.write(data)
 
     print(f"mkfat32: created {img_path} "
-          f"({size_mb} MiB FAT32, {len(files)} files in root)")
+          f"({size_mb} MiB bootable FAT32, stage2 {stage2_sectors} sectors, "
+          f"kernel {kernel_sectors} sectors @ LBA {kernel_lba}, "
+          f"{len(files)} files in root)")
 
 
 if __name__ == "__main__":

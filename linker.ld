@@ -1,4 +1,9 @@
-/* Linker script for ArcadeOS kernel */
+/* Linker script for ArcadeOS kernel
+ *
+ * The kernel is linked at 1 MiB and converted to a flat binary
+ * (objcopy -O binary); the bootloader jumps to the first byte, so
+ * .text.start (the _start stub in boot.asm) must come first.
+ */
 
 ENTRY(_start)
 
@@ -6,13 +11,9 @@ SECTIONS
 {
     . = 1M;
 
-    .boot :
-    {
-        *(.multiboot)
-    }
-
     .text :
     {
+        *(.text.start)
         *(.text)
     }
 
@@ -26,11 +27,18 @@ SECTIONS
         *(.data)
     }
 
+    /* _start zeroes [__bss_start, kernel_end) — flat binaries carry no
+     * NOBITS sections, so nobody else will */
+    . = ALIGN(4);
+    __bss_start = .;
+
     .bss :
     {
+        *(COMMON)
         *(.bss)
     }
 
     /* Symbol marking the end of the kernel – used by the heap allocator */
+    . = ALIGN(4);
     kernel_end = .;
 }

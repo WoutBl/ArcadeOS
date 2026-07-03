@@ -110,7 +110,7 @@ void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
         terminal_writestring("\n");
     } else {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_BROWN, VGA_COLOR_BLACK));
-        terminal_writestring("[FB] No framebuffer from GRUB - VGA text fallback\n");
+        terminal_writestring("[FB] No framebuffer from bootloader - VGA text fallback\n");
     }
 
     /* 4. Set up GDT with known selectors (0x08=code, 0x10=data) */
@@ -128,10 +128,10 @@ void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
     /* 8. Enable hardware interrupts */
     sti();
 
-    /* 9. Verify multiboot magic */
-    if (magic != MULTIBOOT_MAGIC) {
+    /* 9. Verify boot magic (own bootloader, or GRUB if legacy-booted) */
+    if (magic != ARCADEBOOT_MAGIC && magic != MULTIBOOT_MAGIC) {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
-        terminal_writestring("[BOOT] WARNING: Invalid multiboot magic! (0x");
+        terminal_writestring("[BOOT] WARNING: Invalid boot magic! (0x");
         terminal_writehex(magic);
         terminal_writestring(")\n");
     }

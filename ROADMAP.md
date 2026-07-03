@@ -8,9 +8,11 @@ audio, no networking, xHCI is a stub, no real hardware testing yet.
 
 ## Up next
 
-1. **Write my own bootloader.** Drop the GRUB multiboot dependency and boot
-   the kernel myself. This is also the natural place to stop relying on
-   GRUB's BIOS-era assumptions before I go further with hardware.
+1. ~~**Write my own bootloader.**~~ **DONE (July 2026).** Two-stage BIOS
+   bootloader (`boot/stage1.asm` + `boot/stage2.asm`) embedded in the FAT32
+   volume's reserved sectors — GRUB and the ISO are gone entirely, one
+   self-booting `arcadeos.img`. Stage 2 does A20, E820, VBE mode-set, and
+   loads the kernel flat binary to 1 MiB.
 
 2. **Move off 32-bit, onto 64-bit (long mode).** I don't think plain 32-bit
    is a safe bet for modern PCs going forward, so I want the kernel running

@@ -3,7 +3,10 @@
 
 #include "types.h"
 
-/* Multiboot magic value placed in EAX by GRUB */
+/* Magic placed in EAX by the ArcadeOS bootloader (boot/stage2.asm) */
+#define ARCADEBOOT_MAGIC 0xA5CADE05
+
+/* Multiboot magic placed in EAX by GRUB (legacy; still accepted) */
 #define MULTIBOOT_MAGIC 0x2BADB002
 
 /* Flags in multiboot_info_t.flags indicating which fields are valid */

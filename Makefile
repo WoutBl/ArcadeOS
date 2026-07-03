@@ -1,16 +1,21 @@
 # ArcadeOS Build System
 #
 # Targets:
-#   make          - kernel + ISO + FAT32 game volume + all game ELFs
+#   make          - bootloader + kernel + bootable FAT32 game volume + games
 #   make run      - boot in QEMU (GUI window)
 #   make run-headless - boot in QEMU with serial log + monitor socket
 #   make clean    - remove build artifacts
+#
+# The disk image is self-booting: our own two-stage BIOS bootloader
+# (boot/stage1.asm + boot/stage2.asm) lives in the FAT32 reserved sectors
+# and loads the kernel flat binary to 1 MiB. No GRUB, no ISO.
 
 # Compiler and assembler settings
 AS = nasm
 CC = i686-elf-gcc
 LD = i686-elf-ld
 AR = i686-elf-ar
+OBJCOPY = i686-elf-objcopy
 
 # Flags
 ASFLAGS = -f elf32
@@ -18,13 +23,17 @@ CFLAGS = -c -ffreestanding -O2 -Wall -Wextra -Iinclude
 LDFLAGS = -T linker.ld
 
 # Output files
+KERNEL_ELF = build/arcadeos.elf
 KERNEL = arcadeos.bin
-ISO = arcadeos.iso
 DISK = arcadeos.img
 DISK_MB = 64
 
 # Build directory
 BUILD = build
+
+# Bootloader stages (raw binaries)
+STAGE1 = $(BUILD)/stage1.bin
+STAGE2 = $(BUILD)/stage2.bin
 
 # Kernel source files
 C_SOURCES = src/kernel.c src/vga.c src/serial.c src/fb.c src/console_gfx.c \
@@ -49,17 +58,27 @@ APPS = $(BUILD)/launcher.elf $(BUILD)/pong.elf $(BUILD)/snake.elf $(BUILD)/break
 APP_LDFLAGS = -Wl,-N,-Ttext=0x400000,--build-id=none,-e,main
 
 # Default target
-all: $(ISO) $(DISK)
+all: $(DISK)
 
 # Create build directory
 $(BUILD):
 	mkdir -p $(BUILD)
 
-# Build the kernel binary
-$(KERNEL): $(BUILD) $(OBJECTS)
-	$(LD) $(LDFLAGS) -o $(KERNEL) $(OBJECTS)
+# Link the kernel ELF, then flatten it (the bootloader jumps to byte 0)
+$(KERNEL_ELF): $(BUILD) $(OBJECTS)
+	$(LD) $(LDFLAGS) -o $(KERNEL_ELF) $(OBJECTS)
 
-# Assemble boot.asm
+$(KERNEL): $(KERNEL_ELF)
+	$(OBJCOPY) -O binary $(KERNEL_ELF) $(KERNEL)
+
+# Bootloader stages (flat real-mode binaries)
+$(STAGE1): boot/stage1.asm | $(BUILD)
+	$(AS) -f bin boot/stage1.asm -o $(STAGE1)
+
+$(STAGE2): boot/stage2.asm | $(BUILD)
+	$(AS) -f bin boot/stage2.asm -o $(STAGE2)
+
+# Assemble boot.asm (kernel entry stub)
 $(BUILD)/boot.o: boot.asm | $(BUILD)
 	$(AS) $(ASFLAGS) boot.asm -o $(BUILD)/boot.o
 
@@ -87,23 +106,16 @@ $(BUILD)/libc.a: $(LIBC_OBJECTS)
 $(BUILD)/%.elf: apps/%.c $(BUILD)/libc.a | $(BUILD)
 	$(CC) -m32 -Os -s -ffreestanding -nostdlib -fno-builtin $< $(BUILD)/libc.a -o $@ $(APP_LDFLAGS)
 
-# Create bootable ISO
-$(ISO): $(KERNEL)
-	mkdir -p isodir/boot/grub
-	cp $(KERNEL) isodir/boot/$(KERNEL)
-	printf 'set timeout=0\nset default=0\nmenuentry "ArcadeOS" {\n    multiboot /boot/$(KERNEL)\n    boot\n}\n' > isodir/boot/grub/grub.cfg
-	i686-elf-grub-mkrescue -o $(ISO) isodir
-
-# Create the FAT32 game volume with the launcher and games
-$(DISK): $(APPS) tools/mkfat32.py
-	python3 tools/mkfat32.py $(DISK) $(DISK_MB) $(APPS)
+# Create the bootable FAT32 game volume: bootloader + kernel in the
+# reserved sectors, launcher + games in the root directory
+$(DISK): $(STAGE1) $(STAGE2) $(KERNEL) $(APPS) tools/mkfat32.py
+	python3 tools/mkfat32.py $(DISK) $(DISK_MB) $(STAGE1) $(STAGE2) $(KERNEL) $(APPS)
 
 # Run in QEMU with a visible window
-run: $(ISO) $(DISK)
+run: $(DISK)
 	qemu-system-i386 -m 128 \
 		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
-		-drive file=$(ISO),format=raw,if=ide,index=1,media=cdrom \
-		-boot d -usb \
+		-boot c -usb \
 		-serial file:serial.log \
 		-no-reboot
 
@@ -112,21 +124,19 @@ run: $(ISO) $(DISK)
 # interface, and only a privileged process can seize it (libusb
 # USBInterfaceOpenSeize). Run:  sudo make run-ds4
 # While the VM runs, macOS loses the controller; unplug/replug returns it.
-run-ds4: $(ISO) $(DISK)
+run-ds4: $(DISK)
 	qemu-system-i386 -m 128 \
 		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
-		-drive file=$(ISO),format=raw,if=ide,index=1,media=cdrom \
-		-boot d -usb \
+		-boot c -usb \
 		-device usb-host,vendorid=0x054c,productid=0x09cc \
 		-serial file:serial.log \
 		-no-reboot
 
 # Run headless: serial log + QEMU monitor socket (for screendump/sendkey)
-run-headless: $(ISO) $(DISK)
+run-headless: $(DISK)
 	qemu-system-i386 -m 128 \
 		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
-		-drive file=$(ISO),format=raw,if=ide,index=1,media=cdrom \
-		-boot d -usb \
+		-boot c -usb \
 		-serial file:serial.log \
 		-display none \
 		-monitor unix:qemu-monitor.sock,server,nowait \
@@ -134,7 +144,7 @@ run-headless: $(ISO) $(DISK)
 
 # Clean build files
 clean:
-	rm -f $(OBJECTS) $(KERNEL) $(ISO) serial.log qemu-monitor.sock
+	rm -f $(OBJECTS) $(KERNEL) $(KERNEL_ELF) serial.log qemu-monitor.sock arcadeos.iso
 	rm -rf $(BUILD) isodir
 
 # Clean everything including the game volume
