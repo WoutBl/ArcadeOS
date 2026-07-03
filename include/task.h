@@ -24,12 +24,12 @@ typedef struct {
     uint32_t      id;
     task_state_t  state;
     uint32_t      wait_pid;      /* PID to wait for if blocked */
-    uint32_t      esp;           /* Saved stack pointer */
-    uint32_t      cr3;           /* Page Directory (same for all kernel tasks) */
+    uint64_t      esp;           /* Saved stack pointer (RSP) */
+    uint64_t      cr3;           /* PML4 (same for all kernel tasks) */
     void          (*entry)(void);/* Entry point function */
     uint8_t*      stack_base;    /* Base of allocated stack (for kfree) */
     uint32_t      stack_size;    /* Size of the stack */
-    uint32_t      kernel_stack_top; /* ESP0 for TSS */
+    uint64_t      kernel_stack_top; /* RSP0 for TSS */
     char          name[32];      /* Human-readable task name */
     char**        cmdline_args;  /* Deep copy of argv for exec() to push to user stack */
     

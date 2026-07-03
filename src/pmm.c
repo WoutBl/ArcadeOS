@@ -12,7 +12,7 @@
 #include "vga.h"
 
 /* Linker-provided symbol marking the end of the kernel BSS */
-extern uint32_t kernel_end;
+extern uint8_t kernel_end;
 
 /* Bitmap storage */
 static uint8_t*  pmm_bitmap     = NULL;
@@ -95,9 +95,9 @@ void pmm_init(multiboot_info_t* mboot_info) {
     pmm_bitmap_size = total_pages / 8;
     if (total_pages % 8) pmm_bitmap_size++;
 
-    pmm_bitmap = (uint8_t*)((uint32_t)&kernel_end);
+    pmm_bitmap = (uint8_t*)&kernel_end;
     /* Align to 16 bytes */
-    pmm_bitmap = (uint8_t*)(((uint32_t)pmm_bitmap + 15) & ~15);
+    pmm_bitmap = (uint8_t*)(((uintptr_t)pmm_bitmap + 15) & ~(uintptr_t)15);
 
     /* Step 3: Start by marking ALL pages as used */
     for (uint32_t i = 0; i < pmm_bitmap_size; i++)
@@ -112,8 +112,8 @@ void pmm_init(multiboot_info_t* mboot_info) {
         terminal_writedec(mboot_info->mmap_length);
         terminal_writestring(" bytes)...\n");
 
-        uint32_t mmap_addr = mboot_info->mmap_addr;
-        uint32_t mmap_end  = mmap_addr + mboot_info->mmap_length;
+        uintptr_t mmap_addr = mboot_info->mmap_addr;
+        uintptr_t mmap_end  = mmap_addr + mboot_info->mmap_length;
 
         while (mmap_addr < mmap_end) {
             multiboot_mmap_entry_t* entry = (multiboot_mmap_entry_t*)mmap_addr;
@@ -153,7 +153,7 @@ void pmm_init(multiboot_info_t* mboot_info) {
      * Protect from 1 MiB to (bitmap_end + some padding).
      */
     uint32_t kernel_start_addr = 0x100000;  /* 1 MiB – where GRUB loads us */
-    uint32_t bitmap_end = (uint32_t)pmm_bitmap + pmm_bitmap_size;
+    uint32_t bitmap_end = (uint32_t)(uintptr_t)pmm_bitmap + pmm_bitmap_size;
     /* Add 4 KiB safety margin */
     uint32_t protected_end = bitmap_end + PAGE_SIZE;
     uint32_t protected_size = protected_end - kernel_start_addr;
@@ -174,19 +174,19 @@ void pmm_init(multiboot_info_t* mboot_info) {
     terminal_writestring(" KiB)\n");
 }
 
-uint32_t pmm_alloc_page(void) {
+uint64_t pmm_alloc_page(void) {
     for (uint32_t i = 0; i < total_pages; i++) {
         if (!pmm_test_page(i)) {
             pmm_set_page(i);
             used_pages++;
-            return i * PAGE_SIZE;
+            return (uint64_t)i * PAGE_SIZE;
         }
     }
     return 0;  /* Out of physical memory */
 }
 
-void pmm_free_page(uint32_t addr) {
-    uint32_t page = addr / PAGE_SIZE;
+void pmm_free_page(uint64_t addr) {
+    uint64_t page = addr / PAGE_SIZE;
     if (page >= total_pages) return;
     if (page == 0) return;  /* Never free page 0 */
 
@@ -228,7 +228,7 @@ void pmm_dump_info(void) {
     terminal_writestring(" KiB)\n");
 
     terminal_writestring("  Bitmap at:     0x");
-    terminal_writehex((uint32_t)pmm_bitmap);
+    terminal_writehex((uint32_t)(uintptr_t)pmm_bitmap);
     terminal_writestring("\n");
 
     terminal_writestring("  Bitmap size:   ");
@@ -244,7 +244,7 @@ void pmm_dump_info(void) {
  * Scans the bitmap for a run of 'count' free pages, marks them used,
  * and returns the physical address of the first page (0 on failure).
  */
-uint32_t pmm_alloc_pages(uint32_t count) {
+uint64_t pmm_alloc_pages(uint32_t count) {
     if (count == 0) return 0;
     if (count == 1) return pmm_alloc_page();
 
@@ -260,7 +260,7 @@ uint32_t pmm_alloc_pages(uint32_t count) {
                     pmm_set_page(p);
                     used_pages++;
                 }
-                return run_start * PAGE_SIZE;
+                return (uint64_t)run_start * PAGE_SIZE;
             }
         } else {
             run_len = 0;
@@ -269,7 +269,7 @@ uint32_t pmm_alloc_pages(uint32_t count) {
     return 0;   /* No contiguous run large enough */
 }
 
-void pmm_free_pages(uint32_t addr, uint32_t count) {
+void pmm_free_pages(uint64_t addr, uint32_t count) {
     for (uint32_t i = 0; i < count; i++)
-        pmm_free_page(addr + i * PAGE_SIZE);
+        pmm_free_page(addr + (uint64_t)i * PAGE_SIZE);
 }

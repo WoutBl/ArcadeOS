@@ -19,6 +19,6 @@ extern int      current_task_index;
 extern int      scheduler_enabled;
 
 /* Assembly context switch (defined in switch.asm) */
-extern void switch_task(uint32_t* old_esp_ptr, uint32_t new_esp);
+extern void switch_task(uint64_t* old_rsp_ptr, uint64_t new_rsp);
 
 #endif /* SCHEDULER_H */

@@ -10,8 +10,9 @@
 ;      switch to protected mode to copy above 1 MiB)
 ;   4. Find and set a 640x480x32 linear-framebuffer VBE mode
 ;   5. Build a multiboot-compatible boot info struct
-;   6. Enter protected mode and jump to the kernel at 0x100000 with
-;      EAX = ARCADEBOOT_MAGIC, EBX = boot info pointer
+;   6. Build identity page tables (first 4 GiB, 2 MiB pages), enable
+;      long mode, and jump to the 64-bit kernel at 0x100000 with
+;      EDI = ARCADEBOOT_MAGIC, ESI = boot info pointer (SysV args)
 ;
 ; Low-memory layout:
 ;   0x00500  memory map (multiboot format: u32 size(=20) + 20-byte E820 entry)
@@ -20,8 +21,9 @@
 ;   0x00B00  VBE mode info block (256 bytes)
 ;   0x07000  real-mode stack (grows down, set by stage 1)
 ;   0x07C00  stage 1 (patched sector counts read from offsets 504/508)
-;   0x07E00  this code
+;   0x07E00  this code (multiple sectors — nothing else below 0x10000!)
 ;   0x10000  32 KiB disk chunk buffer
+;   0x18000  boot page tables: PML4, PDPT, 4x PD (identity, 2 MiB pages)
 ;   0x100000 kernel
 
 BITS 16
@@ -35,6 +37,7 @@ ORG 0x7E00
 %define CHUNK_SECTORS   64              ; 32 KiB per chunk
 %define KERNEL_DEST     0x100000
 %define STAGE1          0x7C00
+%define PAGETABLES      0x18000         ; 6 pages: PML4, PDPT, PD0..PD3
 %define ARCADE_MAGIC    0xA5CADE05
 
 ; multiboot_info_t field offsets (include/multiboot.h)
@@ -303,7 +306,7 @@ start:
     call print
     mov dword [BOOTINFO + MB_FLAGS], MB_FLAG_MEM | MB_FLAG_MMAP
 
-; ---- 6. Enter protected mode and jump to the kernel ----
+; ---- 6. Enter protected mode, then long mode, and jump to the kernel ----
 enter_kernel:
     cli
     lgdt [gdt_desc]
@@ -322,10 +325,59 @@ pm_entry:
     mov ss, ax
     mov esp, 0x9F000            ; scratch stack; kernel _start replaces it
 
-    mov eax, ARCADE_MAGIC
-    mov ebx, BOOTINFO
-    mov edx, KERNEL_DEST
-    jmp edx
+    ; Boot page tables at 0x18000 (above the chunk buffer, clear of this
+    ; code): identity-map the first 4 GiB with 2 MiB pages (covers RAM +
+    ; the framebuffer MMIO). paging_init() replaces these later.
+    mov edi, PAGETABLES
+    xor eax, eax
+    mov ecx, (6 * 4096) / 4     ; PML4 + PDPT + 4 PDs
+    rep stosd
+
+    mov dword [PAGETABLES + 0x0000], PAGETABLES + 0x1000 + 0x03  ; PML4[0] -> PDPT
+    mov dword [PAGETABLES + 0x1000], PAGETABLES + 0x2000 + 0x03  ; PDPT[0] -> PD0
+    mov dword [PAGETABLES + 0x1008], PAGETABLES + 0x3000 + 0x03  ; PDPT[1] -> PD1
+    mov dword [PAGETABLES + 0x1010], PAGETABLES + 0x4000 + 0x03  ; PDPT[2] -> PD2
+    mov dword [PAGETABLES + 0x1018], PAGETABLES + 0x5000 + 0x03  ; PDPT[3] -> PD3
+
+    mov edi, PAGETABLES + 0x2000
+    mov eax, 0x83               ; present | writable | 2 MiB page
+    mov ecx, 4 * 512            ; 2048 entries x 2 MiB = 4 GiB
+.fill_pd:
+    mov [edi], eax
+    mov dword [edi + 4], 0
+    add eax, 0x200000
+    add edi, 8
+    loop .fill_pd
+
+    ; PAE -> CR3 -> EFER.LME -> paging on = long mode
+    mov eax, cr4
+    or eax, 1 << 5              ; CR4.PAE
+    mov cr4, eax
+    mov eax, PAGETABLES
+    mov cr3, eax
+    mov ecx, 0xC0000080         ; IA32_EFER
+    rdmsr
+    or eax, 1 << 8              ; LME
+    wrmsr
+    mov eax, cr0
+    or eax, 0x80000000          ; CR0.PG
+    mov cr0, eax
+    jmp 0x18:long_entry
+
+BITS 64
+long_entry:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov rsp, 0x9F000
+
+    mov edi, ARCADE_MAGIC       ; kernel_main arg 1 (SysV: RDI)
+    mov esi, BOOTINFO           ; kernel_main arg 2 (SysV: RSI)
+    mov rax, KERNEL_DEST
+    jmp rax
 
 BITS 16
 
@@ -374,12 +426,13 @@ halt:
     hlt
     jmp halt
 
-; ---- GDT: null, flat 32-bit code (0x08), flat 32-bit data (0x10) ----
+; ---- GDT: null, code32 (0x08), data (0x10), code64 (0x18) ----
 align 8
 gdt:
     dq 0
     dq 0x00CF9A000000FFFF       ; code: base 0, limit 4 GiB, 32-bit
     dq 0x00CF92000000FFFF       ; data: base 0, limit 4 GiB
+    dq 0x00AF9A000000FFFF       ; code: 64-bit (L=1)
 gdt_desc:
     dw gdt_desc - gdt - 1
     dd gdt

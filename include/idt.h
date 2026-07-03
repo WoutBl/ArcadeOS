@@ -3,33 +3,43 @@
 
 #include "types.h"
 
-/* IDT entry (8 bytes each, as required by x86) */
+/* IDT entry (16 bytes each in long mode) */
 typedef struct {
-    uint16_t base_low;    /* Lower 16 bits of handler address */
+    uint16_t base_low;    /* Handler address bits 0-15 */
     uint16_t selector;    /* Kernel code segment selector */
-    uint8_t  always0;     /* Must be zero */
+    uint8_t  ist;         /* Interrupt Stack Table index (0 = none) */
     uint8_t  flags;       /* Type and attributes */
-    uint16_t base_high;   /* Upper 16 bits of handler address */
+    uint16_t base_mid;    /* Handler address bits 16-31 */
+    uint32_t base_high;   /* Handler address bits 32-63 */
+    uint32_t reserved;    /* Must be zero */
 } __attribute__((packed)) idt_entry_t;
 
 /* Pointer structure for lidt */
 typedef struct {
     uint16_t limit;
-    uint32_t base;
+    uint64_t base;
 } __attribute__((packed)) idt_ptr_t;
 
-/* Pushed by the ISR stub before calling the C handler */
+/*
+ * Pushed by the ISR stub before calling the C handler.
+ *
+ * 64-bit port note: the fields keep their historical 32-bit names
+ * (eax, eip, ...) but hold the full 64-bit registers (rax, rip, ...) —
+ * this keeps the syscall dispatcher and fault handlers source-compatible.
+ * The layout MUST match the push order in isr.asm's isr_common_stub.
+ */
 typedef struct {
-    uint32_t ds;                                     /* Saved data segment */
-    uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax; /* pusha */
-    uint32_t int_no, err_code;                       /* Interrupt number + error code */
-    uint32_t eip, cs, eflags, useresp, ss;           /* Pushed by CPU */
+    uint64_t ds;                                     /* Saved data segment */
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;   /* Extended GPRs */
+    uint64_t edi, esi, ebp, ebx, edx, ecx, eax;      /* rdi..rax */
+    uint64_t int_no, err_code;                       /* Interrupt number + error code */
+    uint64_t eip, cs, eflags, useresp, ss;           /* iretq frame (always pushed) */
 } __attribute__((packed)) registers_t;
 
 /* Handler callback type */
 typedef void (*isr_handler_t)(registers_t* regs);
 
-/* GDT entry (8 bytes each) */
+/* GDT entry (8 bytes; the 64-bit TSS descriptor spans two entries) */
 typedef struct {
     uint16_t limit_low;
     uint16_t base_low;
@@ -42,7 +52,7 @@ typedef struct {
 /* GDT pointer for lgdt */
 typedef struct {
     uint16_t limit;
-    uint32_t base;
+    uint64_t base;
 } __attribute__((packed)) gdt_ptr_t;
 
 /* Assembly routine to load GDT and reload segment registers (in isr.asm) */
@@ -51,7 +61,7 @@ extern void gdt_flush(gdt_ptr_t* ptr);
 /* Public API */
 void gdt_init(void);
 void idt_init(void);
-void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags);
+void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags);
 void register_interrupt_handler(uint8_t n, isr_handler_t handler);
 
 /* PIC ports */

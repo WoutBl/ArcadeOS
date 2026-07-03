@@ -29,23 +29,12 @@
 tss_t kernel_tss;
 
 /* ──────── TSS initialization ──────── */
-void tss_init(uint32_t kernel_stack_top) {
+void tss_init(uint64_t kernel_stack_top) {
     memset(&kernel_tss, 0, sizeof(tss_t));
 
-    kernel_tss.ss0  = GDT_KERNEL_DATA;       /* Kernel data segment */
-    kernel_tss.esp0 = kernel_stack_top;       /* Kernel stack pointer */
-
-    /*
-     * Set CS and SS in the TSS. These aren't strictly required for
-     * hardware task switching (which we don't use), but some CPU
-     * implementations reference them.
-     */
-    kernel_tss.cs = GDT_KERNEL_CODE | 3;     /* Ring 3 can call into ring 0 */
-    kernel_tss.ss = GDT_KERNEL_DATA;
-    kernel_tss.ds = GDT_KERNEL_DATA;
-    kernel_tss.es = GDT_KERNEL_DATA;
-    kernel_tss.fs = GDT_KERNEL_DATA;
-    kernel_tss.gs = GDT_KERNEL_DATA;
+    /* The 64-bit TSS carries no segment registers – only the ring-0
+     * stack pointer loaded on a Ring 3 → 0 transition. */
+    kernel_tss.rsp0 = kernel_stack_top;
 
     /* I/O map base: point past the end of the TSS to disable I/O bitmap */
     kernel_tss.iomap_base = sizeof(tss_t);
@@ -54,13 +43,13 @@ void tss_init(uint32_t kernel_stack_top) {
     tss_flush();
 
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    terminal_writestring("[TSS] Loaded (esp0=0x");
+    terminal_writestring("[TSS] Loaded (rsp0=0x");
     terminal_writehex(kernel_stack_top);
     terminal_writestring(")\n");
 }
 
-void tss_set_kernel_stack(uint32_t stack_top) {
-    kernel_tss.esp0 = stack_top;
+void tss_set_kernel_stack(uint64_t stack_top) {
+    kernel_tss.rsp0 = stack_top;
 }
 
 /* ──────── Syscall dispatcher (called from isr_handler via int 0x80) ──────── */
@@ -462,7 +451,7 @@ static void syscall_handler(registers_t* regs) {
             void* handler = (void*)regs->ecx;
             
             if (current_task) {
-                if ((int)handler == 1) { /* SIG_IGN */
+                if ((uintptr_t)handler == 1) { /* SIG_IGN */
                     current_task->ignored_signals |= (1 << signum);
                 } else { /* SIG_DFL */
                     current_task->ignored_signals &= ~(1 << signum);
@@ -501,7 +490,7 @@ static void syscall_handler(registers_t* regs) {
                 regs->eax = (uint32_t)-1;
                 break;
             }
-            gfx_present_buffer((const uint32_t*)ptr);
+            gfx_present_buffer((const uint32_t*)(uintptr_t)ptr);
             regs->eax = 0;
             break;
         }
@@ -624,7 +613,7 @@ void syscall_init(void) {
      * Flags = 0xEE: Present (0x80) | DPL 3 (0x60) | 32-bit interrupt gate (0x0E)
      * DPL=3 is critical so ring 3 code is allowed to trigger int 0x80.
      */
-    idt_set_gate(128, (uint32_t)isr128, GDT_KERNEL_CODE, 0xEE);
+    idt_set_gate(128, (uint64_t)isr128, GDT_KERNEL_CODE, 0xEE);
 
     /* Register the C handler */
     register_interrupt_handler(128, syscall_handler);

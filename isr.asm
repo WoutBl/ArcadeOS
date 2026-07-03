@@ -1,64 +1,99 @@
-; ArcadeOS ISR / IRQ Assembly Stubs
+; ArcadeOS ISR / IRQ Assembly Stubs (x86-64)
 ; These provide the low-level interrupt entry points that save CPU state,
-; call the C handler, restore state, and iret.
+; call the C handler, restore state, and iretq.
+;
+; In long mode the CPU always pushes SS:RSP on an interrupt (even for
+; ring 0 → ring 0), so the frame layout is uniform and matches the
+; registers_t struct in idt.h exactly. The push order below MUST stay in
+; sync with that struct (last push = lowest address = first field).
 
-[BITS 32]
+BITS 64
 
 ; ──────────── C handler (defined in idt.c) ────────────
 extern isr_handler
 
 ; ──────────── GDT flush routine ───────────────────────
-; Called from C: gdt_flush(gdt_ptr_t* ptr)
+; Called from C: gdt_flush(gdt_ptr_t* ptr)   (RDI = ptr)
 ; Loads the new GDT and reloads all segment registers.
 global gdt_flush
 gdt_flush:
-    mov eax, [esp + 4]  ; Get pointer to gdt_ptr_t
-    lgdt [eax]          ; Load the GDT
+    lgdt [rdi]
 
-    ; Reload CS via a far jump
-    jmp 0x08:.flush_cs
-.flush_cs:
-    ; Reload all data segment registers with 0x10 (kernel data)
+    ; Reload data segments with 0x10 (kernel data)
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
+
+    ; Reload CS via a far return (no far jmp to a register in long mode)
+    push 0x08
+    lea rax, [rel .flush_cs]
+    push rax
+    retfq
+.flush_cs:
     ret
 
 ; ──────────── Common stub ─────────────────────────────
 isr_common_stub:
-    pusha               ; Push edi, esi, ebp, esp, ebx, edx, ecx, eax
+    ; Push order = registers_t fields from HIGH address down:
+    ;   rax, rcx, rdx, rbx, rbp, rsi, rdi, r8..r15, ds
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
     mov ax, ds
-    push eax            ; Save data segment
+    push rax            ; Save data segment
 
     mov ax, 0x10        ; Load kernel data segment
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
 
-    push esp            ; Push pointer to registers_t struct
+    mov rdi, rsp        ; Arg 1: pointer to registers_t
     call isr_handler
-    add esp, 4          ; Clean up pushed argument
 
-    pop eax             ; Restore original data segment
+    pop rax             ; Restore original data segment
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
 
-    popa                ; Restore registers
-    add esp, 8          ; Remove int_no and err_code from stack
-    iret
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+
+    add rsp, 16         ; Remove int_no and err_code from stack
+    iretq
 
 ; ──────────── ISR macro (no error code) ───────────────
 %macro ISR_NOERRCODE 1
 global isr%1
 isr%1:
-    push dword 0        ; Dummy error code
-    push dword %1       ; Interrupt number
+    push qword 0        ; Dummy error code
+    push qword %1       ; Interrupt number
     jmp isr_common_stub
 %endmacro
 
@@ -66,7 +101,7 @@ isr%1:
 %macro ISR_ERRCODE 1
 global isr%1
 isr%1:
-    push dword %1       ; Interrupt number (error code already on stack)
+    push qword %1       ; Interrupt number (error code already on stack)
     jmp isr_common_stub
 %endmacro
 
@@ -74,8 +109,8 @@ isr%1:
 %macro IRQ 2
 global irq%1
 irq%1:
-    push dword 0        ; Dummy error code
-    push dword %2       ; Remapped interrupt number
+    push qword 0        ; Dummy error code
+    push qword %2       ; Remapped interrupt number
     jmp isr_common_stub
 %endmacro
 
@@ -134,48 +169,45 @@ IRQ 15, 47   ; Secondary ATA Hard Disk
 ; ──────────── System call stub (int 0x80 = ISR 128) ───
 global isr128
 isr128:
-    push dword 0        ; Dummy error code
-    push dword 128      ; Interrupt number (0x80)
+    push qword 0        ; Dummy error code
+    push qword 128      ; Interrupt number (0x80)
     jmp isr_common_stub
 
 ; ──────────── TSS flush (load Task Register) ──────────
 ; Called from C: tss_flush()
 global tss_flush
 tss_flush:
-    mov ax, 0x28        ; TSS selector in the GDT (entry 5, offset 0x28)
-    ltr ax              ; Load Task Register
+    mov ax, 0x28        ; TSS selector in the GDT (entries 5+6, offset 0x28)
+    ltr ax
     ret
 
-; ──────────── Enter User Mode (Ring 3 iret trick) ─────
-; Called from C: enter_user_mode(uint32_t entry_point, uint32_t user_stack)
-; This sets up the stack for iret so the CPU "returns" into Ring 3.
+; ──────────── Enter User Mode (Ring 3 iretq trick) ────
+; Called from C:
+;   enter_user_mode(entry_point, user_stack, argc, argv)
+;   RDI = entry, RSI = user stack, RDX = argc, RCX = argv
+; Builds an iretq frame so the CPU "returns" into Ring 3, with
+; argc/argv placed in RDI/RSI per the SysV calling convention
+; (user apps are entered directly at main()).
 global enter_user_mode
 enter_user_mode:
     cli                         ; Disable interrupts during transition
 
-    ; Get arguments from the current (kernel) stack
-    mov eax, [esp + 4]          ; arg1: entry_point (EIP for user code)
-    mov ecx, [esp + 8]          ; arg2: user_stack  (ESP for user stack)
-
     ; Set data segment registers to User Data (0x20 | RPL 3 = 0x23)
-    mov dx, 0x23
-    mov ds, dx
-    mov es, dx
-    mov fs, dx
-    mov gs, dx
+    mov ax, 0x23
+    mov ds, ax
+    mov es, ax
 
-    ; Build the iret frame on the KERNEL stack:
-    ;   [SS]      = User Data Segment (0x23)
-    ;   [ESP]     = User Stack Pointer
-    ;   [EFLAGS]  = Current EFLAGS with IF enabled
-    ;   [CS]      = User Code Segment (0x18 | RPL 3 = 0x1B)
-    ;   [EIP]     = User entry point
-    push dword 0x23             ; SS  = user data segment
-    push ecx                    ; ESP = user stack pointer
-    pushf                       ; EFLAGS
-    or dword [esp], 0x200       ; Ensure IF (Interrupt Flag) is set
-    push dword 0x1B             ; CS  = user code segment
-    push eax                    ; EIP = user entry point
+    ; Build the iretq frame on the KERNEL stack
+    push qword 0x23             ; SS  = user data segment
+    push rsi                    ; RSP = user stack pointer
+    pushfq                      ; RFLAGS
+    or qword [rsp], 0x200       ; Ensure IF (Interrupt Flag) is set
+    push qword 0x1B             ; CS  = user code segment (0x18 | RPL 3)
+    push rdi                    ; RIP = user entry point
+
+    ; main(argc, argv) arguments for the 64-bit user ABI
+    mov rdi, rdx                ; argc
+    mov rsi, rcx                ; argv
 
     ; "Return" to Ring 3!
-    iret
+    iretq

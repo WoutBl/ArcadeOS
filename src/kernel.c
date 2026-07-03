@@ -168,7 +168,7 @@ void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
     scheduler_init();
 
     /* 16. Task State Segment and system calls */
-    uint32_t kernel_stack_top = (uint32_t)kmalloc(8192) + 8192;
+    uint64_t kernel_stack_top = (uint64_t)(uintptr_t)kmalloc(8192) + 8192;
     tss_init(kernel_stack_top);
     syscall_init();
 

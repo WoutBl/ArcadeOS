@@ -37,7 +37,7 @@ uint32_t fb_height(void)     { return fb_h; }
 uint32_t fb_pitch(void)      { return fb_p; }
 uint8_t  fb_bpp(void)        { return fb_depth; }
 uint32_t fb_phys_addr(void)  { return fb_addr; }
-uint32_t* fb_ptr(void)       { return (uint32_t*)fb_addr; }
+uint32_t* fb_ptr(void)       { return (uint32_t*)(uintptr_t)fb_addr; }
 
 uint32_t fb_size_bytes(void) {
     uint32_t size = fb_p * fb_h;

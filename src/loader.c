@@ -52,7 +52,7 @@ int exec(const char* filename, char* const argv[]) {
         return -1;
     }
 
-    Elf32_Ehdr* ehdr = (Elf32_Ehdr*)file_data;
+    Elf64_Ehdr* ehdr = (Elf64_Ehdr*)file_data;
     if (!elf_verify(ehdr)) {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
         terminal_writestring("[EXEC] Error: Invalid ELF executable format!\n");
@@ -66,91 +66,91 @@ int exec(const char* filename, char* const argv[]) {
     terminal_writestring("'...\n");
 
     /*
-     * Run the whole mapping phase under the KERNEL page directory.
+     * Run the whole mapping phase under the KERNEL PML4.
      * exec() may be called from a task still using another process's
-     * address space (SYS_SPAWN), where the 4 MiB+ identity regions have
-     * been overlaid by that process's user pages. The kernel PD is the
-     * only context where writes to freshly allocated physical pages
-     * (including the cloned page directory itself) are guaranteed to
-     * land on the right frames. current_task->cr3 is updated too so a
-     * preemption mid-exec restores the right directory.
+     * address space (SYS_SPAWN), where the user regions have been
+     * overlaid by that process's pages. The kernel PML4 is the only
+     * context where writes to freshly allocated physical pages
+     * (including the cloned PML4 itself) are guaranteed to land on
+     * the right frames. current_task->cr3 is updated too so a
+     * preemption mid-exec restores the right hierarchy.
      */
-    uint32_t kernel_pd_phys = (uint32_t)paging_get_kernel_pd();
+    uint64_t kernel_pd_phys = (uint64_t)(uintptr_t)paging_get_kernel_pd();
     if (current_task) current_task->cr3 = kernel_pd_phys;
     asm volatile("mov %0, %%cr3" :: "r"(kernel_pd_phys) : "memory");
 
-    /* 1. Clone the kernel's page directory for this user process.
-     *    This shares kernel PDEs (supervisor-only) so the kernel is
+    /* 1. Clone the kernel's PML4 for this user process.
+     *    This shares kernel tables (supervisor-only) so the kernel is
      *    always visible after a Ring 3 → Ring 0 interrupt/syscall. */
-    uint32_t new_pd_phys = paging_clone_kernel_pd();
+    uint64_t new_pd_phys = paging_clone_kernel_pd();
     if (new_pd_phys == 0) {
-        terminal_writestring("[EXEC] Error: Out of memory for Page Directory!\n");
+        terminal_writestring("[EXEC] Error: Out of memory for PML4!\n");
         kfree(file_data);
         return -3;
     }
-    uint32_t* new_pd = (uint32_t*)new_pd_phys;
-    
+    uint64_t* new_pd = (uint64_t*)(uintptr_t)new_pd_phys;
+
     /* 4. Process ELF Program Headers */
-    Elf32_Phdr* phdr = (Elf32_Phdr*)(file_data + ehdr->e_phoff);
+    Elf64_Phdr* phdr = (Elf64_Phdr*)(file_data + ehdr->e_phoff);
     for (int i = 0; i < ehdr->e_phnum; i++) {
         if (phdr[i].p_type == PT_LOAD) {
-            uint32_t memsz  = phdr[i].p_memsz;
-            uint32_t filesz = phdr[i].p_filesz;
-            uint32_t vaddr  = phdr[i].p_vaddr;
-            uint32_t offset = phdr[i].p_offset;
-            
+            uint64_t memsz  = phdr[i].p_memsz;
+            uint64_t filesz = phdr[i].p_filesz;
+            uint64_t vaddr  = phdr[i].p_vaddr;
+            uint64_t offset = phdr[i].p_offset;
+
             /* Calculate page boundaries */
-            uint32_t num_pages = (memsz + (vaddr & 0xFFF) + 4095) / 4096;
-            uint32_t page_vaddr = vaddr & ~0xFFF;
-            
-            for (uint32_t p = 0; p < num_pages; p++) {
-                uint32_t phys = pmm_alloc_page();
+            uint64_t num_pages = (memsz + (vaddr & 0xFFF) + 4095) / 4096;
+            uint64_t page_vaddr = vaddr & ~(uint64_t)0xFFF;
+
+            for (uint64_t p = 0; p < num_pages; p++) {
+                uint64_t phys = pmm_alloc_page();
                 /* Use flags: PRESENT | WRITABLE | USER */
                 paging_map_page_to(new_pd, page_vaddr + p * 4096, phys, PTE_PRESENT | PTE_READ_WRITE | PTE_USER);
-                
+
                 /* Zero out memory */
-                memset((void*)phys, 0, 4096);
-                
-                uint32_t current_vaddr = page_vaddr + p * 4096;
-                uint32_t copy_start = 0;
-                uint32_t copy_amount = 0;
-                
+                memset((void*)(uintptr_t)phys, 0, 4096);
+
+                uint64_t current_vaddr = page_vaddr + p * 4096;
+                uint64_t copy_start = 0;
+                uint64_t copy_amount = 0;
+
                 if (current_vaddr <= vaddr && current_vaddr + 4096 > vaddr) {
                     copy_start = vaddr - current_vaddr;
-                    uint32_t avail = 4096 - copy_start;
+                    uint64_t avail = 4096 - copy_start;
                     copy_amount = (filesz < avail) ? filesz : avail;
-                    memcpy((void*)(phys + copy_start), file_data + offset, copy_amount);
+                    memcpy((void*)(uintptr_t)(phys + copy_start), file_data + offset, copy_amount);
                 } else if (current_vaddr > vaddr && current_vaddr < vaddr + filesz) {
-                    uint32_t relative_offset = current_vaddr - vaddr;
-                    uint32_t avail = filesz - relative_offset;
+                    uint64_t relative_offset = current_vaddr - vaddr;
+                    uint64_t avail = filesz - relative_offset;
                     copy_amount = (avail > 4096) ? 4096 : avail;
-                    memcpy((void*)phys, file_data + offset + relative_offset, copy_amount);
+                    memcpy((void*)(uintptr_t)phys, file_data + offset + relative_offset, copy_amount);
                 }
             }
         }
     }
-    
+
     /* The segments are copied; release the ELF file image */
-    uint32_t entry_point = ehdr->e_entry;
+    uint64_t entry_point = ehdr->e_entry;
     kfree(file_data);
 
     /* 5. Set up a 16 KiB User Stack ending at 0xC0000000 */
-    uint32_t stack_pages = 4;
-    uint32_t stack_vaddr = 0xC0000000 - stack_pages * 4096;
-    for (uint32_t sp = 0; sp < stack_pages; sp++) {
-        uint32_t stack_phys = pmm_alloc_page();
-        memset((void*)stack_phys, 0, 4096);
+    uint64_t stack_pages = 4;
+    uint64_t stack_vaddr = 0xC0000000ULL - stack_pages * 4096;
+    for (uint64_t sp = 0; sp < stack_pages; sp++) {
+        uint64_t stack_phys = pmm_alloc_page();
+        memset((void*)(uintptr_t)stack_phys, 0, 4096);
         paging_map_page_to(new_pd, stack_vaddr + sp * 4096, stack_phys,
                            PTE_PRESENT | PTE_READ_WRITE | PTE_USER);
     }
-    
-    /* 6. Update current running task with isolated Page Directory */
+
+    /* 6. Update current running task with isolated PML4 */
     if (current_task) {
         current_task->cr3 = new_pd_phys;
     }
-    
+
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    terminal_writestring("[EXEC] Jumping to Ring 3 (EIP: 0x");
+    terminal_writestring("[EXEC] Jumping to Ring 3 (RIP: 0x");
     terminal_writehex(entry_point);
     terminal_writestring(")...\n");
 
@@ -159,41 +159,40 @@ int exec(const char* filename, char* const argv[]) {
 
     /* 8. Switch MMU Context */
     asm volatile("mov %0, %%cr3" :: "r"(new_pd_phys) : "memory");
-    
-    /* 9. Set up User Stack contents for main(argc, argv) */
-    uint32_t user_esp = 0xC0000000;
-    
+
+    /* 9. Copy argv strings + pointer array onto the user stack */
+    uint64_t user_esp = 0xC0000000ULL;
+
     int argc = 0;
     if (argv) {
         while (argv[argc]) argc++;
     }
-    
-    uint32_t argv_ptrs[32];
+
+    uint64_t argv_ptrs[32];
     for (int i = 0; i < argc; i++) {
         int len = strlen(argv[i]) + 1;
         user_esp -= len;
-        memcpy((void*)user_esp, argv[i], len);
+        memcpy((void*)(uintptr_t)user_esp, argv[i], len);
         argv_ptrs[i] = user_esp;
     }
     argv_ptrs[argc] = 0;
-    
-    user_esp &= ~3; /* align to 4 bytes */
-    
-    int ptrs_size = (argc + 1) * sizeof(uint32_t);
+
+    user_esp &= ~(uint64_t)7; /* align to 8 bytes */
+
+    int ptrs_size = (argc + 1) * sizeof(uint64_t);
     user_esp -= ptrs_size;
-    memcpy((void*)user_esp, argv_ptrs, ptrs_size);
-    uint32_t argv_array_ptr = user_esp;
-    
-    user_esp -= 4;
-    *(uint32_t*)user_esp = argv_array_ptr; /* argv ptr */
-    user_esp -= 4;
-    *(uint32_t*)user_esp = argc;           /* argc */
-    user_esp -= 4;
-    *(uint32_t*)user_esp = 0;              /* dummy return address */
-    
-    /* 10. Use iret trick to drop privileges. */
-    enter_user_mode(entry_point, user_esp);
-    
+    memcpy((void*)(uintptr_t)user_esp, argv_ptrs, ptrs_size);
+    uint64_t argv_array_ptr = user_esp;
+
+    /* SysV: RSP ≡ 8 (mod 16) at function entry (as if after a call) */
+    user_esp &= ~(uint64_t)15;
+    user_esp -= 8;
+    *(uint64_t*)(uintptr_t)user_esp = 0;   /* dummy return address */
+
+    /* 10. Use iretq trick to drop privileges; argc/argv go in RDI/RSI
+     *     (64-bit SysV passes arguments in registers, not on the stack) */
+    enter_user_mode(entry_point, user_esp, (uint64_t)argc, argv_array_ptr);
+
     return 0;
 }
 

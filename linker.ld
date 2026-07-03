@@ -27,9 +27,9 @@ SECTIONS
         *(.data)
     }
 
-    /* _start zeroes [__bss_start, kernel_end) — flat binaries carry no
-     * NOBITS sections, so nobody else will */
-    . = ALIGN(4);
+    /* _start zeroes [__bss_start, kernel_end) with 8-byte stores — flat
+     * binaries carry no NOBITS sections, so nobody else will */
+    . = ALIGN(8);
     __bss_start = .;
 
     .bss :
@@ -39,6 +39,6 @@ SECTIONS
     }
 
     /* Symbol marking the end of the kernel – used by the heap allocator */
-    . = ALIGN(4);
+    . = ALIGN(8);
     kernel_end = .;
 }

@@ -1,10 +1,10 @@
 /*
- * ArcadeOS – ELF32 verification and parser
+ * ArcadeOS – ELF64 verification and parser
  */
 
 #include "elf.h"
 
-bool elf_verify(Elf32_Ehdr* header) {
+bool elf_verify(Elf64_Ehdr* header) {
     if (!header) return false;
 
     /* Verify Magic Number '\x7fELF' */
@@ -12,8 +12,8 @@ bool elf_verify(Elf32_Ehdr* header) {
         return false;
     }
 
-    /* Verify architecture class is 32-bit (e_ident[4] == 1) */
-    if (header->e_ident[4] != 1) {
+    /* Verify architecture class is 64-bit */
+    if (header->e_ident[4] != ELFCLASS64) {
         return false;
     }
 
@@ -22,8 +22,8 @@ bool elf_verify(Elf32_Ehdr* header) {
         return false;
     }
 
-    /* Verify machine architecture is x86/386 */
-    if (header->e_machine != EM_386) {
+    /* Verify machine architecture is x86-64 */
+    if (header->e_machine != EM_X86_64) {
         return false;
     }
 

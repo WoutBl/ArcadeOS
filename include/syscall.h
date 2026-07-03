@@ -44,34 +44,28 @@
 #define GDT_USER_DATA    0x23   /* 0x20 | RPL 3 */
 #define GDT_TSS          0x28
 
-/* TSS structure (x86 hardware requirement: 104 bytes) */
+/* 64-bit TSS (104 bytes): only RSP0 and the I/O map base matter here */
 typedef struct {
-    uint32_t prev_tss;
-    uint32_t esp0;       /* Kernel stack pointer (used on ring 3→0 transition) */
-    uint32_t ss0;        /* Kernel stack segment (0x10) */
-    uint32_t esp1;
-    uint32_t ss1;
-    uint32_t esp2;
-    uint32_t ss2;
-    uint32_t cr3;
-    uint32_t eip;
-    uint32_t eflags;
-    uint32_t eax, ecx, edx, ebx;
-    uint32_t esp, ebp, esi, edi;
-    uint32_t es, cs, ss, ds, fs, gs;
-    uint32_t ldt;
-    uint16_t trap;
+    uint32_t reserved0;
+    uint64_t rsp0;       /* Kernel stack pointer (used on ring 3→0 transition) */
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t reserved1;
+    uint64_t ist[7];     /* Interrupt Stack Table (unused) */
+    uint64_t reserved2;
+    uint16_t reserved3;
     uint16_t iomap_base;
 } __attribute__((packed)) tss_t;
 
 /* Public API */
 void syscall_init(void);
-void tss_init(uint32_t kernel_stack_top);
-void tss_set_kernel_stack(uint32_t stack_top);
+void tss_init(uint64_t kernel_stack_top);
+void tss_set_kernel_stack(uint64_t stack_top);
 
 /* Assembly routines (in isr.asm) */
 extern void isr128(void);           /* int 0x80 stub */
 extern void tss_flush(void);        /* Load TSS selector into TR */
-extern void enter_user_mode(uint32_t entry_point, uint32_t user_stack);
+extern void enter_user_mode(uint64_t entry_point, uint64_t user_stack,
+                            uint64_t argc, uint64_t argv);
 
 #endif /* SYSCALL_H */

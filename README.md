@@ -2,10 +2,11 @@
 
 This project is completely created with fable5
 
-A bare-metal x86 gaming console operating system, architected like a modern
-console: a custom two-stage BIOS bootloader boots the kernel straight into a
-graphical game launcher, games are ELF binaries loaded from a FAT32 game
-volume and executed in Ring 3, and all hardware access (graphics,
+A bare-metal x86-64 gaming console operating system, architected like a
+modern console: a custom two-stage BIOS bootloader takes the machine from
+real mode all the way into 64-bit long mode and boots the kernel straight
+into a graphical game launcher, games are ELF64 binaries loaded from a FAT32
+game volume and executed in Ring 3, and all hardware access (graphics,
 controllers) goes through syscalls. No GRUB — the whole boot chain is ours.
 
 Built on the previously project (name: OS2.0) base kernel: GDT/IDT, bitmap PMM, identity-mapped
@@ -34,7 +35,7 @@ TSS-based Ring 3 support, int 0x80 syscalls, VFS + devfs, and ATA PIO.
 
 | Subsystem | Files | Notes |
 |---|---|---|
-| Bootloader | `boot/stage1.asm`, `boot/stage2.asm` | Two-stage BIOS bootloader living in the FAT32 reserved sectors: stage 1 is the volume boot record around the BPB; stage 2 enables A20, collects the E820 memory map, loads the kernel flat binary to 1 MiB (INT 13h chunks + protected-mode copies), sets a 640x480x32 VBE linear-framebuffer mode, and enters protected mode with a multiboot-compatible boot info struct |
+| Bootloader | `boot/stage1.asm`, `boot/stage2.asm` | Two-stage BIOS bootloader living in the FAT32 reserved sectors: stage 1 is the volume boot record around the BPB; stage 2 enables A20, collects the E820 memory map, loads the kernel flat binary to 1 MiB (INT 13h chunks + protected-mode copies), sets a 640x480x32 VBE linear-framebuffer mode, builds identity page tables (first 4 GiB, 2 MiB pages), and enters **long mode** with a multiboot-compatible boot info struct |
 | Framebuffer | `fb.c`, `boot.asm` | 640x480x32 LFB set up by the bootloader via VBE; mapped into the identity map by `paging.c` |
 | Graphics API | `console_gfx.c/h` | Double-buffered software renderer: clear, rects, lines, sprites (alpha-keyed), 8x8 font text; `gfx_present_buffer()` backs the user-space present syscall |
 | Boot console | `vga.c` | The classic terminal API now renders glyphs onto the framebuffer (VGA text fallback kept); all output mirrored to COM1 (`serial.c`) |
@@ -63,7 +64,7 @@ Shared ABI structs: `include/console_abi.h`.
 
 ## Building
 
-Prerequisites (macOS): `brew install nasm i686-elf-gcc qemu`
+Prerequisites (macOS): `brew install nasm x86_64-elf-gcc qemu`
 
 ```sh
 make            # bootloader + kernel + arcadeos.img (bootable FAT32 volume)
@@ -84,9 +85,16 @@ automatically.
 2. Stage 1 reads stage 2 from reserved sectors (LBA 8) via INT 13h LBA
 3. Stage 2: A20 → E820 memory map → kernel to `0x100000` (32 KiB chunks,
    copied above 1 MiB through brief protected-mode hops) → VBE 640x480x32
-   LFB mode-set → protected mode → jump to the kernel with
-   `EAX=0xA5CADE05`, `EBX=boot info`
+   LFB mode-set → identity page tables (first 4 GiB, 2 MiB pages) →
+   PAE + EFER.LME + paging = **64-bit long mode** → jump to the kernel with
+   `RDI=0xA5CADE05`, `RSI=boot info` (SysV args)
 4. The kernel entry stub (`boot.asm`) zeroes `.bss` and calls `kernel_main`
+
+The kernel and games are 64-bit throughout: 4-level paging (2 MiB kernel
+identity pages, 4 KiB user pages overlaid per process), a 64-bit GDT/IDT/TSS,
+and ELF64 user binaries entered at `main(argc, argv)` per the SysV ABI.
+Kernel and games are compiled without SSE/MMX (`-mno-sse -msoft-float`) —
+context switches don't save FPU state.
 
 Note: rebuilding regenerates `arcadeos.img`, which wipes save files along with
 it. Keep a copy of the image if you care about your high scores.

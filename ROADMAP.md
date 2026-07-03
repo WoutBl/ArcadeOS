@@ -14,16 +14,14 @@ audio, no networking, xHCI is a stub, no real hardware testing yet.
    self-booting `arcadeos.img`. Stage 2 does A20, E820, VBE mode-set, and
    loads the kernel flat binary to 1 MiB.
 
-2. **Move off 32-bit, onto 64-bit (long mode).** I don't think plain 32-bit
-   is a safe bet for modern PCs going forward, so I want the kernel running
-   in long mode. (Worth noting for myself: x86-64 CPUs still execute 32-bit
-   protected mode in hardware just fine — the real risk to plain 32-bit on
-   real hardware is newer boards going UEFI-only with no BIOS/CSM fallback,
-   which is more about the bootloader than the CPU mode. Doesn't change the
-   plan, just means the bootloader rewrite and the 64-bit move are really
-   the same piece of work: new GDT/segments, 4-level paging instead of the
-   current 2-level scheme, toolchain switch to x86_64-elf-gcc, ELF64
-   loading, and a syscall ABI update since arg-passing registers change.)
+2. ~~**Move off 32-bit, onto 64-bit (long mode).**~~ **DONE (July 2026).**
+   The whole stack is 64-bit now: stage 2 builds identity page tables and
+   enters long mode before jumping to the kernel; the kernel has a 64-bit
+   GDT/IDT/TSS, 4-level paging (2 MiB kernel identity pages + 4 KiB user
+   overlays), 64-bit context switching, and loads ELF64 games entered at
+   main(argc, argv) per the SysV ABI. Toolchain switched to x86_64-elf-gcc
+   with -mno-red-zone/-mno-sse for the kernel. Verified in QEMU: launcher,
+   Snake, Breakout, high-score save to FAT32, crash-safe quit-to-launcher.
 
 3. **AHCI driver.** `ata.c` today is legacy PATA PIO, which won't see disks
    on real hardware at all. Need this before storage/save-data work means

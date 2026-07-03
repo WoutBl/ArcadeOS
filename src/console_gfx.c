@@ -35,7 +35,7 @@ int gfx_init(void) {
         return 0;
     }
 
-    backbuffer = (uint32_t*)phys;   /* Identity-mapped RAM */
+    backbuffer = (uint32_t*)(uintptr_t)phys;   /* Identity-mapped RAM */
     memset(backbuffer, 0, bytes);
     gfx_is_ready = 1;
 

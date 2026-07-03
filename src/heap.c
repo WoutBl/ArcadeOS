@@ -58,7 +58,7 @@ void heap_init(void) {
     }
 
     heap_total = pages_allocated * PAGE_SIZE;
-    heap_start = (block_header_t*)first_page;
+    heap_start = (block_header_t*)(uintptr_t)first_page;
 
     /* Single free block spanning the entire heap */
     heap_start->size = heap_total - HEADER_SIZE;
@@ -150,7 +150,7 @@ void heap_dump_info(void) {
     terminal_setcolor(vga_entry_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
 
     terminal_writestring("  Start address: 0x");
-    terminal_writehex((uint32_t)heap_start);
+    terminal_writehex((uint32_t)(uintptr_t)heap_start);
     terminal_writestring("\n");
 
     terminal_writestring("  Total size:    ");

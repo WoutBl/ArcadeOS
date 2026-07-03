@@ -1,44 +1,38 @@
-; ArcadeOS – Low-level context switch
+; ArcadeOS – Low-level context switch (x86-64)
 ;
-; void switch_task(uint32_t* old_esp_ptr, uint32_t new_esp)
+; void switch_task(uint64_t* old_rsp_ptr, uint64_t new_rsp)
+;   RDI = old_rsp_ptr, RSI = new_rsp
 ;
-; Saves callee-saved registers on the current stack, stores ESP
-; into *old_esp_ptr, loads new_esp, restores registers, and returns.
+; Saves callee-saved registers on the current stack, stores RSP
+; into *old_rsp_ptr, loads new_rsp, restores registers, and returns.
 ; The 'ret' instruction pops the return address from the new stack,
 ; effectively resuming the new task where it left off.
 
-[BITS 32]
+BITS 64
 
 global switch_task
 switch_task:
     ; Save callee-saved registers on the CURRENT stack
-    push ebp
-    push ebx
-    push esi
-    push edi
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
 
-    ; Stack layout now:
-    ;   [ESP+ 0] = EDI
-    ;   [ESP+ 4] = ESI
-    ;   [ESP+ 8] = EBX
-    ;   [ESP+12] = EBP
-    ;   [ESP+16] = return address
-    ;   [ESP+20] = arg1: old_esp_ptr  (uint32_t*)
-    ;   [ESP+24] = arg2: new_esp      (uint32_t)
+    ; Save current RSP → *old_rsp_ptr
+    mov [rdi], rsp
 
-    ; Save current ESP → *old_esp_ptr
-    mov eax, [esp + 20]     ; eax = old_esp_ptr
-    mov [eax], esp          ; *old_esp_ptr = current ESP
-
-    ; Load the new task's stack pointer
-    mov eax, [esp + 24]     ; eax = new_esp (still reading from OLD stack!)
-    mov esp, eax            ; Switch stacks!
+    ; Switch stacks
+    mov rsp, rsi
 
     ; Restore callee-saved registers from the NEW stack
-    pop edi
-    pop esi
-    pop ebx
-    pop ebp
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
 
     ; Return to wherever the new task left off
     ; (for a new task, this jumps to task_bootstrap)

@@ -1,8 +1,11 @@
 /*
- * ArcadeOS – 32-bit x86 Paging (Virtual Memory)
+ * ArcadeOS – x86-64 4-level Paging (Virtual Memory)
  *
- * Identity-maps all physical RAM so virtual == physical.
- * Page Directory and Page Tables are allocated from the PMM.
+ * Identity-maps all physical RAM (and the framebuffer MMIO region) with
+ * 2 MiB pages so virtual == physical, replacing the boot page tables the
+ * bootloader set up. User processes get a cloned PML4; the loader overlays
+ * 4 KiB user pages on top via paging_map_page_to(), which privately copies
+ * any table still shared with the kernel before modifying it.
  * ISR 14 is hooked as a Page Fault handler.
  */
 
@@ -14,51 +17,74 @@
 #include "task.h"
 #include "scheduler.h"
 
-/*
- * The kernel Page Directory (1024 entries × 4 bytes = 4 KiB).
- * Each entry points to a Page Table (or is empty).
- */
-static uint32_t* page_directory = NULL;
+/* The kernel PML4 (512 entries × 8 bytes = 4 KiB) */
+static uint64_t* kernel_pml4 = NULL;
 
-/*
- * Keep track of the Page Table pointers so we can access them
- * for mapping/unmapping individual pages later.
- */
-static uint32_t* page_tables[PAGES_PER_DIR];
+/* Stats for dump_info */
+static uint64_t mapped_2m_pages = 0;
 
-/* Number of 4 MiB regions we identity-mapped */
-static uint32_t mapped_regions = 0;
-
-uint32_t* paging_get_kernel_pd(void) {
-    return page_directory;
+uint64_t* paging_get_kernel_pd(void) {
+    return kernel_pml4;
 }
 
 /* ──────── CR register helpers ──────── */
 
-/* Read the faulting virtual address from CR2 */
-static inline uint32_t read_cr2(void) {
-    uint32_t val;
+static inline uint64_t read_cr2(void) {
+    uint64_t val;
     asm volatile("mov %%cr2, %0" : "=r"(val));
     return val;
 }
 
-/* Load a Page Directory physical address into CR3 */
-static inline void write_cr3(uint32_t pd_phys) {
-    asm volatile("mov %0, %%cr3" :: "r"(pd_phys) : "memory");
+static inline void write_cr3(uint64_t pml4_phys) {
+    asm volatile("mov %0, %%cr3" :: "r"(pml4_phys) : "memory");
 }
 
-/* Enable paging by setting bit 31 of CR0 */
-static inline void enable_paging_hw(void) {
-    uint32_t cr0;
-    asm volatile("mov %%cr0, %0" : "=r"(cr0));
-    cr0 |= 0x80000000;  /* PG bit */
-    asm volatile("mov %0, %%cr0" :: "r"(cr0) : "memory");
+/* ──────── Table walk helpers ──────── */
+
+static inline int idx_pml4(uint64_t v) { return (int)((v >> 39) & 0x1FF); }
+static inline int idx_pdpt(uint64_t v) { return (int)((v >> 30) & 0x1FF); }
+static inline int idx_pd(uint64_t v)   { return (int)((v >> 21) & 0x1FF); }
+static inline int idx_pt(uint64_t v)   { return (int)((v >> 12) & 0x1FF); }
+
+static inline uint64_t* entry_table(uint64_t entry) {
+    return (uint64_t*)(uintptr_t)(entry & PTE_FRAME_MASK);
+}
+
+static uint64_t* alloc_table(void) {
+    uint64_t phys = pmm_alloc_page();
+    if (phys == 0) return NULL;
+    uint64_t* t = (uint64_t*)(uintptr_t)phys;
+    memset(t, 0, PAGE_SIZE_4K);
+    return t;
+}
+
+/* Get (or allocate) the next-level table under table[idx] for KERNEL use */
+static uint64_t* kernel_next_level(uint64_t* table, int idx, uint64_t flags) {
+    if (!(table[idx] & PTE_PRESENT)) {
+        uint64_t* nt = alloc_table();
+        if (!nt) return NULL;
+        table[idx] = (uint64_t)(uintptr_t)nt | flags;
+    }
+    return entry_table(table[idx]);
+}
+
+/* Identity-map one 2 MiB region into the kernel hierarchy */
+static void kernel_map_2m(uint64_t addr, uint64_t extra_flags) {
+    uint64_t* pdpt = kernel_next_level(kernel_pml4, idx_pml4(addr),
+                                       PTE_PRESENT | PTE_READ_WRITE);
+    if (!pdpt) return;
+    uint64_t* pd = kernel_next_level(pdpt, idx_pdpt(addr),
+                                     PTE_PRESENT | PTE_READ_WRITE);
+    if (!pd) return;
+    pd[idx_pd(addr)] = (addr & ~(uint64_t)(PAGE_SIZE_2M - 1))
+                       | PTE_PRESENT | PTE_READ_WRITE | PTE_PS | extra_flags;
+    mapped_2m_pages++;
 }
 
 /* ──────── Page Fault Handler (ISR 14) ──────── */
 static void page_fault_handler(registers_t* regs) {
-    uint32_t faulting_addr = read_cr2();
-    uint32_t error_code    = regs->err_code;
+    uint64_t faulting_addr = read_cr2();
+    uint64_t error_code    = regs->err_code;
 
     /*
      * Ring 3 fault: a game crashed. A console must survive this –
@@ -71,7 +97,7 @@ static void page_fault_handler(registers_t* regs) {
         terminal_writestring(current_task->name);
         terminal_writestring("' page-faulted at 0x");
         terminal_writehex(faulting_addr);
-        terminal_writestring(" (EIP 0x");
+        terminal_writestring(" (RIP 0x");
         terminal_writehex(regs->eip);
         terminal_writestring(") - terminated\n");
 
@@ -110,7 +136,6 @@ static void page_fault_handler(registers_t* regs) {
     terminal_writehex(error_code);
     terminal_writestring("\n");
 
-    /* Decode the error code bits */
     terminal_writestring("  Cause: ");
     if (!(error_code & 0x01)) {
         terminal_writestring("Page not present");
@@ -135,200 +160,145 @@ static void page_fault_handler(registers_t* regs) {
     }
     terminal_writestring("\n");
 
-    terminal_writestring("\n  EIP: 0x");
+    terminal_writestring("\n  RIP: 0x");
     terminal_writehex(regs->eip);
     terminal_writestring("\n");
 
     terminal_writestring("\n  System halted.");
 
-    /* Halt forever */
     for (;;) hlt();
 }
 
 /* ──────── Paging initialization ──────── */
 void paging_init(void) {
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
-    terminal_writestring("[PAGING] Initializing virtual memory...\n");
+    terminal_writestring("[PAGING] Initializing virtual memory (4-level)...\n");
 
     /* Step 1: Register the Page Fault handler (ISR 14) */
     register_interrupt_handler(14, page_fault_handler);
 
-    /* Step 2: Allocate a page-aligned Page Directory from the PMM */
-    uint32_t pd_phys = pmm_alloc_page();
-    if (pd_phys == 0) {
+    /* Step 2: Allocate the kernel PML4 */
+    kernel_pml4 = alloc_table();
+    if (kernel_pml4 == NULL) {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
-        terminal_writestring("[PAGING] FATAL: Could not allocate Page Directory!\n");
+        terminal_writestring("[PAGING] FATAL: Could not allocate PML4!\n");
         cli();
         for (;;) hlt();
     }
-    page_directory = (uint32_t*)pd_phys;
 
-    /* Zero out all 1024 entries (no pages mapped initially) */
-    memset(page_directory, 0, PAGE_SIZE_4K);
-    memset(page_tables, 0, sizeof(page_tables));
-
-    /*
-     * Step 3: Identity-map all physical memory.
-     *
-     * We must at minimum map:
-     *   - 0x00000 – 0xFFFFF  (first 1 MiB: BIOS, VGA buffer at 0xB8000)
-     *   - 0x100000+           (kernel code & data, PMM bitmap, heap)
-     *
-     * For simplicity, we identity-map everything the PMM knows about.
-     * Each PDE covers 4 MiB, so we need (total_pages * 4K) / 4M tables.
-     */
-    uint32_t total_phys_bytes = pmm_get_total_pages() * PAGE_SIZE_4K;
-    uint32_t num_pde_needed = total_phys_bytes / PDE_COVER;
-    if (total_phys_bytes % PDE_COVER) num_pde_needed++;
-
-    /* Cap at 1024 (full 4 GiB address space) */
-    if (num_pde_needed > PAGES_PER_DIR) num_pde_needed = PAGES_PER_DIR;
-
-    for (uint32_t pde = 0; pde < num_pde_needed; pde++) {
-        /* Allocate a Page Table (4 KiB, page-aligned) from PMM */
-        uint32_t pt_phys = pmm_alloc_page();
-        if (pt_phys == 0) {
-            terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
-            terminal_writestring("[PAGING] FATAL: Out of pages for Page Tables!\n");
-            cli();
-            for (;;) hlt();
-        }
-
-        uint32_t* pt = (uint32_t*)pt_phys;
-        page_tables[pde] = pt;
-
-        /* Fill 1024 PTEs: identity map each 4 KiB page in this 4 MiB region */
-        uint32_t base_addr = pde * PDE_COVER;
-        for (uint32_t pte = 0; pte < PAGES_PER_TABLE; pte++) {
-            uint32_t phys = base_addr + (pte * PAGE_SIZE_4K);
-            /* REMOVE PTE_USER: Kernel space should NOT be user-accessible */
-            pt[pte] = phys | PTE_PRESENT | PTE_READ_WRITE; 
-        }
-
-        /* REMOVE PTE_USER from PDE for kernel regions */
-        page_directory[pde] = pt_phys | PTE_PRESENT | PTE_READ_WRITE;
+    /* Step 3: Identity-map all physical RAM with 2 MiB pages */
+    uint64_t total_phys_bytes = (uint64_t)pmm_get_total_pages() * PAGE_SIZE_4K;
+    for (uint64_t addr = 0; addr < total_phys_bytes; addr += PAGE_SIZE_2M) {
+        kernel_map_2m(addr, 0);
     }
 
-    mapped_regions = num_pde_needed;
-
-    /*
-     * Step 3b: Identity-map the linear framebuffer.
-     * The LFB lives in MMIO space above physical RAM (e.g. 0xFD000000
-     * on QEMU stdvga), so the loop above never covered it. Without this
-     * mapping the first console write after enable_paging_hw() would
-     * page-fault.
-     */
+    /* Step 3b: Identity-map the linear framebuffer (MMIO above RAM,
+     * e.g. 0xFD000000 on QEMU stdvga) with write-through caching. */
     if (fb_available()) {
-        uint32_t fb_base  = fb_phys_addr() & PTE_FRAME_MASK;
-        uint32_t fb_pages = fb_size_bytes() / PAGE_SIZE_4K;
-        for (uint32_t i = 0; i < fb_pages; i++) {
-            uint32_t addr = fb_base + i * PAGE_SIZE_4K;
-            paging_map_page(addr, addr, PTE_PRESENT | PTE_READ_WRITE | PTE_WRITE_THRU);
+        uint64_t fb_base = fb_phys_addr() & ~(uint64_t)(PAGE_SIZE_2M - 1);
+        uint64_t fb_end  = fb_phys_addr() + fb_size_bytes();
+        for (uint64_t addr = fb_base; addr < fb_end; addr += PAGE_SIZE_2M) {
+            kernel_map_2m(addr, PTE_WRITE_THRU);
         }
     }
 
-    /* Step 4: Load the Page Directory into CR3 and enable paging */
-    write_cr3(pd_phys);
-    enable_paging_hw();
+    /* Step 4: Load the kernel PML4 (replaces the bootloader's tables) */
+    write_cr3((uint64_t)(uintptr_t)kernel_pml4);
 
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     terminal_writestring("[PAGING] Enabled! Identity-mapped ");
-    terminal_writedec(mapped_regions * 4);
-    terminal_writestring(" MiB (");
-    terminal_writedec(mapped_regions);
-    terminal_writestring(" page tables)\n");
+    terminal_writedec((uint32_t)(mapped_2m_pages * 2));
+    terminal_writestring(" MiB (2 MiB pages, 4-level)\n");
 }
 
 /*
- * ──────── Clone kernel PD for a new user process ────────
+ * ──────── Clone kernel PML4 for a new user process ────────
  *
- * Creates a fresh, empty Page Directory and copies all currently
- * mapped KERNEL PDE entries verbatim (shared page tables, no user bit).
- * User-space regions (above 0xC0000000 is the conventional boundary,
- * but we are identity-mapped so we copy ALL kernel entries and let the
- * caller overlay user pages on top with paging_map_page_to()).
- *
- * Returns the PHYSICAL address of the new PD (for loading into CR3).
- * Returns 0 on allocation failure.
+ * Copies all present PML4 entries verbatim – the process initially
+ * shares every kernel table (supervisor-only, so Ring 3 cannot touch
+ * them). paging_map_page_to() splits off private copies on demand.
+ * Returns the PHYSICAL address of the new PML4, or 0 on failure.
  */
-uint32_t paging_clone_kernel_pd(void) {
-    uint32_t new_pd_phys = pmm_alloc_page();
-    if (new_pd_phys == 0) return 0;
+uint64_t paging_clone_kernel_pd(void) {
+    uint64_t* new_pml4 = alloc_table();
+    if (!new_pml4) return 0;
 
-    uint32_t* new_pd = (uint32_t*)new_pd_phys;
+    for (int i = 0; i < ENTRIES_PER_TABLE; i++) {
+        new_pml4[i] = kernel_pml4[i];
+    }
+    return (uint64_t)(uintptr_t)new_pml4;
+}
 
-    /* Zero out all 1024 entries first */
-    memset(new_pd, 0, PAGE_SIZE_4K);
+/*
+ * Descend one level for a USER mapping. If the entry is missing, allocate
+ * a fresh table. If it still points at the kernel's shared table for this
+ * slot, allocate a private copy first (so kernel tables stay pristine).
+ * The rewritten entry gets the USER bit – ring 3 access requires it at
+ * every level; kernel entries *inside* the copied table keep supervisor
+ * flags, so games still can't touch kernel memory.
+ */
+static uint64_t* user_next_level(uint64_t* table, int idx, uint64_t* kernel_table) {
+    uint64_t entry  = table[idx];
+    uint64_t kentry = kernel_table ? kernel_table[idx] : 0;
+
+    if (!(entry & PTE_PRESENT)) {
+        uint64_t* nt = alloc_table();
+        if (!nt) return NULL;
+        table[idx] = (uint64_t)(uintptr_t)nt | PTE_PRESENT | PTE_READ_WRITE | PTE_USER;
+        return nt;
+    }
+
+    if ((kentry & PTE_PRESENT) &&
+        (entry & PTE_FRAME_MASK) == (kentry & PTE_FRAME_MASK)) {
+        /* Shared with the kernel: split off a private copy */
+        uint64_t* copy = alloc_table();
+        if (!copy) return NULL;
+        memcpy(copy, entry_table(kentry), PAGE_SIZE_4K);
+        table[idx] = (uint64_t)(uintptr_t)copy | PTE_PRESENT | PTE_READ_WRITE | PTE_USER;
+        return copy;
+    }
+
+    return entry_table(entry);
+}
+
+/* ──────── Map a 4 KiB user page into a process PML4 ──────── */
+void paging_map_page_to(uint64_t* pml4, uint64_t vaddr, uint64_t paddr, uint64_t flags) {
+    int i4 = idx_pml4(vaddr);
+    int i3 = idx_pdpt(vaddr);
+    int i2 = idx_pd(vaddr);
+    int i1 = idx_pt(vaddr);
+
+    /* Kernel tables along this path (for shared-table detection) */
+    uint64_t* kpdpt = (kernel_pml4[i4] & PTE_PRESENT)
+                      ? entry_table(kernel_pml4[i4]) : NULL;
+    uint64_t* kpd   = (kpdpt && (kpdpt[i3] & PTE_PRESENT))
+                      ? entry_table(kpdpt[i3]) : NULL;
+
+    uint64_t* pdpt = user_next_level(pml4, i4, kernel_pml4);
+    if (!pdpt) return;
+    uint64_t* pd = user_next_level(pdpt, i3, kpdpt);
+    if (!pd) return;
 
     /*
-     * Copy kernel PDEs.  We share the SAME physical page tables –
-     * they are supervisor-only (no PTE_USER on the PDEs), so they
-     * cannot be accessed from Ring 3.  Any write to kernel PDEs by
-     * the child would cause a GP fault rather than silently corrupting
-     * kernel state.
+     * PT level: a kernel PD entry here is a 2 MiB identity page (PS set),
+     * not a table. Replace it with a fresh, empty 4 KiB page table – the
+     * process's user pages OVERLAY the identity map, exactly like the
+     * 32-bit design. (This is why exec() must run under the kernel PML4
+     * when writing to freshly allocated physical pages.)
      */
-    for (uint32_t i = 0; i < PAGES_PER_DIR; i++) {
-        if (page_directory[i] & PTE_PRESENT) {
-            /* Share the kernel page table; keep the same PDE flags */
-            new_pd[i] = page_directory[i];
-        }
+    uint64_t pde = pd[i2];
+    uint64_t* pt;
+    if (!(pde & PTE_PRESENT) || (pde & PTE_PS) ||
+        (kpd && (kpd[i2] & PTE_PRESENT) &&
+         (pde & PTE_FRAME_MASK) == (kpd[i2] & PTE_FRAME_MASK))) {
+        pt = alloc_table();
+        if (!pt) return;
+        pd[i2] = (uint64_t)(uintptr_t)pt | PTE_PRESENT | PTE_READ_WRITE | PTE_USER;
+    } else {
+        pt = entry_table(pde);
     }
 
-    return new_pd_phys;
-}
-
-/* ──────── Map a single page ──────── */
-void paging_map_page(uint32_t virtual_addr, uint32_t physical_addr, uint32_t flags) {
-    uint32_t pde_index = virtual_addr / PDE_COVER;
-    uint32_t pte_index = (virtual_addr % PDE_COVER) / PAGE_SIZE_4K;
-
-    /* If no page table exists for this PDE, allocate one */
-    if (page_tables[pde_index] == NULL) {
-        uint32_t pt_phys = pmm_alloc_page();
-        if (pt_phys == 0) return;
-
-        uint32_t* pt = (uint32_t*)pt_phys;
-        memset(pt, 0, PAGE_SIZE_4K);
-        page_tables[pde_index] = pt;
-        page_directory[pde_index] = pt_phys | PTE_PRESENT | PTE_READ_WRITE | PTE_USER;
-    }
-
-    /* Set the PTE */
-    page_tables[pde_index][pte_index] = (physical_addr & PTE_FRAME_MASK) | flags;
-
-    /* Flush the TLB for this address */
-    asm volatile("invlpg (%0)" :: "r"(virtual_addr) : "memory");
-}
-
-void paging_map_page_to(uint32_t* pd, uint32_t vaddr, uint32_t paddr, uint32_t flags) {
-    uint32_t pde_idx = vaddr >> 22;
-    uint32_t pte_idx = (vaddr >> 12) & 0x3FF;
-    
-    /* If no page table exists, or it belongs to the kernel, allocate a private one */
-    if (!(pd[pde_idx] & PTE_PRESENT) || (pd[pde_idx] & PTE_FRAME_MASK) == (page_directory[pde_idx] & PTE_FRAME_MASK)) {
-        uint32_t pt_phys = pmm_alloc_page();
-        uint32_t* pt = (uint32_t*)pt_phys;
-        memset(pt, 0, PAGE_SIZE_4K);
-        /* Set PDE with USER bit so apps can traverse it */
-        pd[pde_idx] = pt_phys | PTE_PRESENT | PTE_READ_WRITE | PTE_USER;
-    }
-    
-    uint32_t* pt = (uint32_t*)(pd[pde_idx] & PTE_FRAME_MASK);
-    pt[pte_idx] = (paddr & PTE_FRAME_MASK) | flags;
-}
-
-/* ──────── Unmap a single page ──────── */
-void paging_unmap_page(uint32_t virtual_addr) {
-    uint32_t pde_index = virtual_addr / PDE_COVER;
-    uint32_t pte_index = (virtual_addr % PDE_COVER) / PAGE_SIZE_4K;
-
-    if (page_tables[pde_index] == NULL) return;
-
-    /* Clear the PTE */
-    page_tables[pde_index][pte_index] = 0;
-
-    /* Flush the TLB for this address */
-    asm volatile("invlpg (%0)" :: "r"(virtual_addr) : "memory");
+    pt[i1] = (paddr & PTE_FRAME_MASK) | flags;
 }
 
 /* ──────── Dump paging info ──────── */
@@ -337,34 +307,15 @@ void paging_dump_info(void) {
     terminal_writestring("Paging Information:\n");
     terminal_setcolor(vga_entry_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
 
-    terminal_writestring("  Page Directory:  0x");
-    terminal_writehex((uint32_t)page_directory);
+    terminal_writestring("  Kernel PML4:     0x");
+    terminal_writehex((uint64_t)(uintptr_t)kernel_pml4);
     terminal_writestring("\n");
 
     terminal_writestring("  Identity mapped: ");
-    terminal_writedec(mapped_regions * 4);
+    terminal_writedec((uint32_t)(mapped_2m_pages * 2));
     terminal_writestring(" MiB (");
-    terminal_writedec(mapped_regions);
-    terminal_writestring(" page tables)\n");
+    terminal_writedec((uint32_t)mapped_2m_pages);
+    terminal_writestring(" x 2 MiB pages)\n");
 
-    terminal_writestring("  Page size:       4 KiB\n");
-    terminal_writestring("  PDE coverage:    4 MiB each\n");
-
-    /* Count total mapped pages */
-    uint32_t mapped_pages = 0;
-    for (uint32_t pde = 0; pde < PAGES_PER_DIR; pde++) {
-        if (page_tables[pde] != NULL) {
-            for (uint32_t pte = 0; pte < PAGES_PER_TABLE; pte++) {
-                if (page_tables[pde][pte] & PTE_PRESENT) {
-                    mapped_pages++;
-                }
-            }
-        }
-    }
-
-    terminal_writestring("  Mapped pages:    ");
-    terminal_writedec(mapped_pages);
-    terminal_writestring(" (");
-    terminal_writedec(mapped_pages * 4);
-    terminal_writestring(" KiB)\n");
+    terminal_writestring("  Levels:          4 (PML4 > PDPT > PD > PT)\n");
 }

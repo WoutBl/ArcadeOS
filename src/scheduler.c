@@ -89,7 +89,7 @@ void schedule(void) {
     current_task = new_task;
 
     /* Perform the actual context switch */
-    uint32_t current_cr3;
+    uint64_t current_cr3;
     asm volatile("mov %%cr3, %0" : "=r"(current_cr3));
     
     /* Update TSS kernel stack for Ring 3 → 0 transitions */
@@ -125,11 +125,11 @@ void scheduler_init(void) {
     main_task->entry = NULL;   /* Already running */
     main_task->stack_base = NULL;  /* Boot stack, not from kmalloc */
     main_task->stack_size = 0;
-    extern uint32_t stack_top;
-    main_task->kernel_stack_top = (uint32_t)&stack_top;
+    extern uint64_t stack_top;
+    main_task->kernel_stack_top = (uint64_t)&stack_top;
 
     /* Read current CR3 */
-    uint32_t cr3;
+    uint64_t cr3;
     asm volatile("mov %%cr3, %0" : "=r"(cr3));
     main_task->cr3 = cr3;
 

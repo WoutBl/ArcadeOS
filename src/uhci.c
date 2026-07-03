@@ -175,7 +175,7 @@ static int uhci_control(usb_controller_t* hc, uint8_t addr, int low_speed,
 
     ctrl_tds[n].ctrl_status = TD_STS_ACTIVE | TD_CTRL_3ERR | ls_flag;
     ctrl_tds[n].token       = td_token(TD_PID_SETUP, addr, 0, 0, 8);
-    ctrl_tds[n].buffer      = (uint32_t)setup_buf;
+    ctrl_tds[n].buffer      = (uint32_t)(uintptr_t)setup_buf;
     n++;
 
     uint32_t remaining = data_len;
@@ -187,7 +187,7 @@ static int uhci_control(usb_controller_t* hc, uint8_t addr, int low_speed,
         ctrl_tds[n].ctrl_status = TD_STS_ACTIVE | TD_CTRL_3ERR | ls_flag;
         ctrl_tds[n].token       = td_token(dir_in ? TD_PID_IN : TD_PID_OUT,
                                            addr, 0, toggle, chunk);
-        ctrl_tds[n].buffer      = (uint32_t)(data_buf + offset);
+        ctrl_tds[n].buffer      = (uint32_t)(uintptr_t)(data_buf + offset);
         n++;
 
         offset    += chunk;
@@ -203,11 +203,11 @@ static int uhci_control(usb_controller_t* hc, uint8_t addr, int low_speed,
 
     /* Link the chain (depth-first so it completes in few frames) */
     for (int i = 0; i < n - 1; i++)
-        ctrl_tds[i].link = (uint32_t)&ctrl_tds[i + 1] | UHCI_LINK_DEPTH;
+        ctrl_tds[i].link = (uint32_t)(uintptr_t)&ctrl_tds[i + 1] | UHCI_LINK_DEPTH;
     ctrl_tds[n - 1].link = UHCI_LINK_TERMINATE;
 
     /* Hand the chain to the controller */
-    qh_ctrl->element_link = (uint32_t)&ctrl_tds[0];
+    qh_ctrl->element_link = (uint32_t)(uintptr_t)&ctrl_tds[0];
 
     /* Poll for completion (element link reaches TERMINATE) */
     uint32_t deadline = system_ticks + 500;   /* 500 ms is generous */
@@ -215,7 +215,7 @@ static int uhci_control(usb_controller_t* hc, uint8_t addr, int low_speed,
         /* Check the in-flight TD for a hard error */
         uint32_t elem = qh_ctrl->element_link & ~0xFu;
         if (elem) {
-            uhci_td_t* td = (uhci_td_t*)elem;
+            uhci_td_t* td = (uhci_td_t*)(uintptr_t)elem;
             uint32_t sts = td->ctrl_status;
             if (!(sts & TD_STS_ACTIVE) && (sts & TD_STS_ERRMASK)) {
                 qh_ctrl->element_link = UHCI_LINK_TERMINATE;
@@ -298,7 +298,7 @@ static void uhci_start_interrupt_pipe(usb_controller_t* hc, int port) {
                     | (dev->low_speed ? TD_CTRL_LS : 0);
     td->token       = td_token(TD_PID_IN, dev->addr, dev->ep_in,
                                int_toggle[port], dev->ep_in_maxpkt);
-    td->buffer      = (uint32_t)int_buf[port];
+    td->buffer      = (uint32_t)(uintptr_t)int_buf[port];
 
     /* Only one element link on the interrupt QH: chain both port TDs.
      * (With two active HID devices the re-arm in the service routine
@@ -309,9 +309,9 @@ static void uhci_start_interrupt_pipe(usb_controller_t* hc, int port) {
         if (!hc->devices[p].in_use) continue;
         if (!first) {
             first = int_td[p];
-            qh_int->element_link = (uint32_t)first;
+            qh_int->element_link = (uint32_t)(uintptr_t)first;
         } else {
-            first->link = (uint32_t)int_td[p];   /* Breadth: next TD same frame */
+            first->link = (uint32_t)(uintptr_t)int_td[p];   /* Breadth: next TD same frame */
             first = int_td[p];
         }
     }
@@ -343,7 +343,7 @@ static void uhci_service_interrupt_pipe(usb_controller_t* hc, int port) {
         /* Endpoint error (e.g. device unplugged mid-transfer): retry */
         td->ctrl_status = TD_STS_ACTIVE | TD_CTRL_3ERR
                         | (dev->low_speed ? TD_CTRL_LS : 0);
-        qh_int->element_link = (uint32_t)int_td[port];
+        qh_int->element_link = (uint32_t)(uintptr_t)int_td[port];
         return;
     }
 
@@ -358,7 +358,7 @@ static void uhci_service_interrupt_pipe(usb_controller_t* hc, int port) {
                                int_toggle[port], dev->ep_in_maxpkt);
     td->ctrl_status = TD_STS_ACTIVE | TD_CTRL_3ERR
                     | (dev->low_speed ? TD_CTRL_LS : 0);
-    qh_int->element_link = (uint32_t)int_td[port];
+    qh_int->element_link = (uint32_t)(uintptr_t)int_td[port];
 }
 
 /* ──────── Enumeration ──────── */
@@ -558,29 +558,29 @@ int uhci_init(usb_controller_t* hc) {
         return 0;
     }
 
-    frame_list = (uint32_t*)fl_page;
-    memset((void*)fl_page,   0, 4096);
-    memset((void*)pool_page, 0, 4096);
-    memset((void*)buf_page,  0, 4096);
+    frame_list = (uint32_t*)(uintptr_t)fl_page;
+    memset((void*)(uintptr_t)fl_page,   0, 4096);
+    memset((void*)(uintptr_t)pool_page, 0, 4096);
+    memset((void*)(uintptr_t)buf_page,  0, 4096);
 
-    qh_int    = (uhci_qh_t*)pool_page;
-    qh_ctrl   = (uhci_qh_t*)(pool_page + 16);
-    ctrl_tds  = (uhci_td_t*)(pool_page + 64);
-    int_td[0] = (uhci_td_t*)(pool_page + 64 + UHCI_MAX_CTRL_TDS * sizeof(uhci_td_t));
+    qh_int    = (uhci_qh_t*)(uintptr_t)pool_page;
+    qh_ctrl   = (uhci_qh_t*)(uintptr_t)(pool_page + 16);
+    ctrl_tds  = (uhci_td_t*)(uintptr_t)(pool_page + 64);
+    int_td[0] = (uhci_td_t*)(uintptr_t)(pool_page + 64 + UHCI_MAX_CTRL_TDS * sizeof(uhci_td_t));
     int_td[1] = int_td[0] + 1;
 
-    setup_buf  = (uint8_t*)buf_page;
-    data_buf   = (uint8_t*)(buf_page + 16);
-    int_buf[0] = (uint8_t*)(buf_page + 512);
-    int_buf[1] = (uint8_t*)(buf_page + 512 + 64);
+    setup_buf  = (uint8_t*)(uintptr_t)buf_page;
+    data_buf   = (uint8_t*)(uintptr_t)(buf_page + 16);
+    int_buf[0] = (uint8_t*)(uintptr_t)(buf_page + 512);
+    int_buf[1] = (uint8_t*)(uintptr_t)(buf_page + 512 + 64);
 
     /* Skeleton: every frame → interrupt QH → control QH → end */
-    qh_int->head_link     = (uint32_t)qh_ctrl | UHCI_LINK_QH;
+    qh_int->head_link     = (uint32_t)(uintptr_t)qh_ctrl | UHCI_LINK_QH;
     qh_int->element_link  = UHCI_LINK_TERMINATE;
     qh_ctrl->head_link    = UHCI_LINK_TERMINATE;
     qh_ctrl->element_link = UHCI_LINK_TERMINATE;
     for (int i = 0; i < 1024; i++)
-        frame_list[i] = (uint32_t)qh_int | UHCI_LINK_QH;
+        frame_list[i] = (uint32_t)(uintptr_t)qh_int | UHCI_LINK_QH;
 
     engine_hc = hc;
 

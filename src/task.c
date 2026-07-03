@@ -83,8 +83,8 @@ int create_kernel_thread(void (*entry)(void), const char* name) {
     task->pending_signals = 0;
     task->ignored_signals = 0;
 
-    /* Read the current CR3 (all kernel tasks share the same page directory) */
-    uint32_t cr3;
+    /* Read the current CR3 (all kernel tasks share the same PML4) */
+    uint64_t cr3;
     asm volatile("mov %%cr3, %0" : "=r"(cr3));
     task->cr3 = cr3;
 
@@ -102,28 +102,32 @@ int create_kernel_thread(void (*entry)(void), const char* name) {
      *
      * Top of stack (high addresses):
      *   [task_bootstrap]  ← return address for switch_task's 'ret'
-     *   [0]               ← fake EBP
-     *   [0]               ← fake EBX
-     *   [0]               ← fake ESI
-     *   [0]               ← fake EDI   ← task->esp points HERE
+     *   [0]               ← fake RBP
+     *   [0]               ← fake RBX
+     *   [0]               ← fake R12
+     *   [0]               ← fake R13
+     *   [0]               ← fake R14
+     *   [0]               ← fake R15   ← task->esp points HERE
      */
-    uint32_t* stack_top = (uint32_t*)(task->stack_base + TASK_STACK_SIZE);
+    uint64_t* stack_top = (uint64_t*)(task->stack_base + TASK_STACK_SIZE);
 
-    *(--stack_top) = (uint32_t)task_bootstrap; /* Return address */
-    *(--stack_top) = 0;                        /* EBP */
-    *(--stack_top) = 0;                        /* EBX */
-    *(--stack_top) = 0;                        /* ESI */
-    *(--stack_top) = 0;                        /* EDI */
+    *(--stack_top) = (uint64_t)task_bootstrap; /* Return address */
+    *(--stack_top) = 0;                        /* RBP */
+    *(--stack_top) = 0;                        /* RBX */
+    *(--stack_top) = 0;                        /* R12 */
+    *(--stack_top) = 0;                        /* R13 */
+    *(--stack_top) = 0;                        /* R14 */
+    *(--stack_top) = 0;                        /* R15 */
 
-    task->esp = (uint32_t)stack_top;
+    task->esp = (uint64_t)stack_top;
     /*
      * kernel_stack_top must be the HIGHEST address of this task's kernel stack.
-     * The TSS.esp0 field is loaded with this value on every context switch so
+     * The TSS.rsp0 field is loaded with this value on every context switch so
      * that the CPU knows where to put the kernel stack frame when a Ring 3 → 0
-     * transition happens (interrupt / syscall).  It must NOT be the saved ESP
+     * transition happens (interrupt / syscall).  It must NOT be the saved RSP
      * (which decreases as the stack grows), but the fixed top-of-stack address.
      */
-    task->kernel_stack_top = (uint32_t)(task->stack_base + TASK_STACK_SIZE);
+    task->kernel_stack_top = (uint64_t)(task->stack_base + TASK_STACK_SIZE);
 
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     terminal_writestring("[TASK] Created: ");

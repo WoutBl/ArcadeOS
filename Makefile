@@ -12,14 +12,17 @@
 
 # Compiler and assembler settings
 AS = nasm
-CC = i686-elf-gcc
-LD = i686-elf-ld
-AR = i686-elf-ar
-OBJCOPY = i686-elf-objcopy
+CC = x86_64-elf-gcc
+LD = x86_64-elf-ld
+AR = x86_64-elf-ar
+OBJCOPY = x86_64-elf-objcopy
 
 # Flags
-ASFLAGS = -f elf32
-CFLAGS = -c -ffreestanding -O2 -Wall -Wextra -Iinclude
+# Kernel: no red zone (ISRs run on the interrupted stack) and no SSE/MMX
+# (context switches don't save FPU state; GCC must not emit vector code)
+ASFLAGS = -f elf64
+NOFPU = -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -msoft-float
+CFLAGS = -c -ffreestanding -O2 -Wall -Wextra -Iinclude $(NOFPU)
 LDFLAGS = -T linker.ld
 
 # Output files
@@ -96,7 +99,7 @@ $(BUILD)/%.o: src/%.c | $(BUILD)
 
 # Compile Libc C source files
 $(BUILD)/libc_%.o: libc/%.c | $(BUILD)
-	$(CC) -m32 -c -ffreestanding -O2 -Wall -Wextra $< -o $@
+	$(CC) -c -ffreestanding -O2 -Wall -Wextra $(NOFPU) $< -o $@
 
 # Create Libc Archive (static library)
 $(BUILD)/libc.a: $(LIBC_OBJECTS)
@@ -104,7 +107,7 @@ $(BUILD)/libc.a: $(LIBC_OBJECTS)
 
 # Compile Ring 3 User Apps
 $(BUILD)/%.elf: apps/%.c $(BUILD)/libc.a | $(BUILD)
-	$(CC) -m32 -Os -s -ffreestanding -nostdlib -fno-builtin $< $(BUILD)/libc.a -o $@ $(APP_LDFLAGS)
+	$(CC) -Os -s -ffreestanding -nostdlib -fno-builtin $(NOFPU) $< $(BUILD)/libc.a -o $@ $(APP_LDFLAGS)
 
 # Create the bootable FAT32 game volume: bootloader + kernel in the
 # reserved sectors, launcher + games in the root directory
@@ -113,7 +116,7 @@ $(DISK): $(STAGE1) $(STAGE2) $(KERNEL) $(APPS) tools/mkfat32.py
 
 # Run in QEMU with a visible window
 run: $(DISK)
-	qemu-system-i386 -m 128 \
+	qemu-system-x86_64 -m 128 \
 		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
 		-boot c -usb \
 		-serial file:serial.log \
@@ -125,7 +128,7 @@ run: $(DISK)
 # USBInterfaceOpenSeize). Run:  sudo make run-ds4
 # While the VM runs, macOS loses the controller; unplug/replug returns it.
 run-ds4: $(DISK)
-	qemu-system-i386 -m 128 \
+	qemu-system-x86_64 -m 128 \
 		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
 		-boot c -usb \
 		-device usb-host,vendorid=0x054c,productid=0x09cc \
@@ -134,7 +137,7 @@ run-ds4: $(DISK)
 
 # Run headless: serial log + QEMU monitor socket (for screendump/sendkey)
 run-headless: $(DISK)
-	qemu-system-i386 -m 128 \
+	qemu-system-x86_64 -m 128 \
 		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
 		-boot c -usb \
 		-serial file:serial.log \
