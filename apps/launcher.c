@@ -6,16 +6,11 @@
  * game exits, the launcher takes the screen back.
  */
 
+#include "../sdk/arcade.h"
 #include "../libc/syscall.h"
 #include "../libc/string.h"
-#include "../libc/console.h"
 
-#define MAX_W 1024
-#define MAX_H 768
 #define MAX_GAMES 16
-
-/* The launcher's private framebuffer (presented via SYS_GFX_PRESENT) */
-static uint32_t framebuf[MAX_W * MAX_H];
 
 typedef struct {
     char name[64];
@@ -85,38 +80,28 @@ static void draw_ui(surface_t* s, int selected, unsigned int t) {
 }
 
 int main(void) {
-    gfx_info_t info;
-    if (gfx_info(&info) != 0 || info.width * info.height > MAX_W * MAX_H) {
+    arcade_t a;
+    if (arcade_init(&a) != 0) {
         write(1, "launcher: no usable framebuffer\n", 32);
         exit(1);
     }
 
-    surface_t screen = { framebuf, (int)info.width, (int)info.height };
-
     scan_games();
 
     int selected = 0;
-    unsigned short prev_buttons = 0;
 
-    while (1) {
-        pad_state_t pad;
-        pad_read(0, &pad);
-
-        /* Edge-detect button presses */
-        unsigned short pressed = (unsigned short)(pad.buttons & ~prev_buttons);
-        prev_buttons = pad.buttons;
-
-        if ((pressed & PAD_BTN_DOWN) && num_games > 0) {
+    while (arcade_frame(&a)) {
+        if ((a.pressed & PAD_BTN_DOWN) && num_games > 0) {
             selected = (selected + 1) % num_games;
-            sound(600, 30);
+            sfx_move();
         }
-        if ((pressed & PAD_BTN_UP) && num_games > 0) {
+        if ((a.pressed & PAD_BTN_UP) && num_games > 0) {
             selected = (selected + num_games - 1) % num_games;
-            sound(600, 30);
+            sfx_move();
         }
 
-        if ((pressed & (PAD_BTN_A | PAD_BTN_START)) && num_games > 0) {
-            sound(900, 80);
+        if ((a.pressed & (PAD_BTN_A | PAD_BTN_START)) && num_games > 0) {
+            sfx_select();
             char path[80] = "/games/";
             strcpy(path + 7, games[selected].name);
 
@@ -124,14 +109,12 @@ int main(void) {
             int pid = spawn(path, game_argv);
             if (pid >= 0) {
                 wait(pid);          /* Blocked until the game exits */
-                prev_buttons = 0xFFFF;   /* Swallow buttons held over the transition */
+                a.pad.buttons = 0xFFFF;  /* Swallow buttons held over the transition */
                 scan_games();
             }
         }
 
-        draw_ui(&screen, selected, ticks());
-        gfx_present(framebuf);
-        msleep(16);   /* ~60 fps */
+        draw_ui(&a.screen, selected, ticks());
     }
 
     return 0;

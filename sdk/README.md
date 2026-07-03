@@ -17,8 +17,9 @@ libc and provides what every game needs so you don't hand-roll it again:
 
 Everything from `libc/console.h` is available too (drawing helpers,
 `sound()`, raw syscalls). The reference game is
-[apps/demo.c](../apps/demo.c) (STARCATCH) — it uses every SDK feature in
-under 200 lines.
+[apps/starcatch.c](../apps/starcatch.c) (STARCATCH) — it uses every SDK
+feature in under 200 lines. Pong, Snake, Breakout, and the launcher are
+all built on the SDK too.
 
 ## Starting a new game
 

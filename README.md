@@ -67,11 +67,12 @@ Shared ABI structs: `include/console_abi.h`.
 
 ### Game SDK
 
-New games are written against **libarcade** ([sdk/arcade.h](sdk/arcade.h),
+All games are written against **libarcade** ([sdk/arcade.h](sdk/arcade.h),
 docs in [sdk/README.md](sdk/README.md)): a fixed-timestep game loop, input
 edge detection, fixed-point math, sprites, entities with AABB collision,
-save slots, canned sound effects, and a PRNG. `apps/demo.c` (STARCATCH)
-is the reference game — every SDK feature in under 200 lines.
+save slots (slot 0-9 per game), canned sound effects, and a PRNG.
+`apps/starcatch.c` (STARCATCH) is the reference game — every SDK feature
+in under 200 lines.
 
 ## Building
 
@@ -144,12 +145,15 @@ product id in the Makefile for a v1 pad (0x05C4).
 
 ## Games
 
+All games (and the launcher) are built on the SDK:
+
 - `apps/launcher.c` – the home screen (Ring 3 init process)
 - `apps/pong.c` – reference title: pad input + fixed-point physics + present
 - `apps/snake.c` – grid movement, screen wrapping, persistent high score
 - `apps/breakout.c` – brick grid sized from `gfx_info`, persistent high score
-- `apps/demo.c` – STARCATCH, the SDK reference game (sprites, entities,
-  collision, save slots — all through `sdk/arcade.h`)
+- `apps/starcatch.c` – STARCATCH, the SDK reference game (sprites, entities,
+  collision, save slots — all through `sdk/arcade.h`); ships as
+  `STARCATC.ELF` (8.3 filename limit)
 
 Games persist data with `save_data("NAME.SAV", &blob, len)` /
 `load_data(...)` from `libc/console.h` — whole-file reads/writes of 8.3-named

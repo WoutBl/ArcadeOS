@@ -58,11 +58,12 @@ audio, no networking, xHCI is a stub, no real hardware testing yet.
   `libarcade` (sdk/arcade.h + sdk/arcade.c): fixed-timestep loop, input
   edge detection, fixed-point math, color-keyed sprites, entities with
   AABB collision, save slots, canned SFX, and a PRNG — documented in
-  sdk/README.md with a copy-paste template. STARCATCH (apps/demo.c) is
-  the reference game, using every feature in under 200 lines. Existing
-  games still run on raw libc; new games should use the SDK. Later:
-  port the old games over, PCM sample/mixing audio API, and asset
-  pipeline once the PC-side editor idea gets its design pass.
+  sdk/README.md with a copy-paste template. STARCATCH (apps/starcatch.c)
+  is the reference game, using every feature in under 200 lines — and
+  Pong, Snake, Breakout, and the launcher are all ported onto the SDK
+  now too (no game talks raw syscalls anymore). Later: PCM
+  sample/mixing audio API, and an asset pipeline once the PC-side
+  editor idea gets its design pass.
 
 - **PC-side game editor / dev tool (far future, sketchy idea).** Build an
   editor that runs on a normal PC (not on ArcadeOS itself) for putting

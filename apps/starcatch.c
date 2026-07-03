@@ -1,11 +1,11 @@
 /*
- * ArcadeOS – STARCATCH (SDK demo game)
+ * ArcadeOS – STARCATCH
  *
  * The reference game for the ArcadeOS SDK (sdk/arcade.h): steer the ship
  * with the D-pad or left stick, catch the falling stars, dodge the rocks.
  * Exercises every SDK feature: the fixed-timestep loop, input edges,
  * sprites, entities, AABB collision, canned SFX, PRNG, and save slots
- * (high score in slot 0).
+ * (high score in slot 0 -> STARCAT0.SAV).
  */
 
 #include "../sdk/arcade.h"
@@ -90,12 +90,12 @@ static void spawn_faller(entity_t* e, int screen_w) {
 int main(void) {
     arcade_t a;
     if (arcade_init(&a) != 0) {
-        write(1, "starcatch: no framebuffer\n", 26);
+        write(1, "starcatch: no framebuffer\n", 27);
         return 1;
     }
 
     save_t sv;
-    int high = 0;
+    int high = 0, high_dirty = 0;
     if (arcade_load("STARCAT", 0, &sv, sizeof(sv)) == (int)sizeof(sv) &&
         sv.magic == SAVE_MAGIC)
         high = sv.high;
@@ -113,7 +113,14 @@ int main(void) {
     unsigned int next_spawn = 0;
 
     while (arcade_frame(&a)) {
-        if (a.pressed & PAD_BTN_SELECT) exit(0);
+        if (a.pressed & PAD_BTN_SELECT) {
+            if (high_dirty) {
+                sv.magic = SAVE_MAGIC;
+                sv.high  = high;
+                arcade_save("STARCAT", 0, &sv, sizeof(sv));
+            }
+            exit(0);
+        }
 
         if (game_over) {
             if (a.pressed & PAD_BTN_START) {
@@ -149,6 +156,7 @@ int main(void) {
                     fall[i].active = 0;
                     if (fall[i].kind == KIND_STAR) {
                         score++;
+                        if (score > high) { high = score; high_dirty = 1; }
                         sfx_score();
                     } else {
                         lives--;
@@ -156,11 +164,11 @@ int main(void) {
                         if (lives <= 0) {
                             game_over = 1;
                             sfx_gameover();
-                            if (score > high) {
-                                high = score;
+                            if (high_dirty) {
                                 sv.magic = SAVE_MAGIC;
                                 sv.high  = high;
                                 arcade_save("STARCAT", 0, &sv, sizeof(sv));
+                                high_dirty = 0;
                             }
                         }
                     }
@@ -186,6 +194,8 @@ int main(void) {
         draw_number(&a.screen, a.w - 120 + 6*8, 10, lives, rgb(255,100,100));
 
         if (game_over) {
+            surf_draw_text(&a.screen, a.w/2 - 9*8*3/2, a.h/2 - 72, "STARCATCH",
+                           rgb(255,211,77), SURF_TRANSPARENT, 3);
             surf_draw_text(&a.screen, a.w/2 - 4*8*4, a.h/2 - 24, "GAME OVER",
                            rgb(255,80,80), SURF_TRANSPARENT, 4);
             surf_draw_text(&a.screen, a.w/2 - 8*8, a.h/2 + 24, "START TO RESTART",

@@ -58,7 +58,7 @@ LIBC_OBJECTS = $(patsubst libc/%.c,$(BUILD)/libc_%.o,$(LIBC_SOURCES))
 SDK_OBJECTS = $(BUILD)/sdk_arcade.o
 
 # Games / apps shipped on the FAT32 volume
-APPS = $(BUILD)/launcher.elf $(BUILD)/pong.elf $(BUILD)/snake.elf $(BUILD)/breakout.elf $(BUILD)/demo.elf
+APPS = $(BUILD)/launcher.elf $(BUILD)/pong.elf $(BUILD)/snake.elf $(BUILD)/breakout.elf $(BUILD)/starcatch.elf
 
 # User app link flags: entry = main (no crt0), fixed base at 4 MiB
 APP_LDFLAGS = -Wl,-N,-Ttext=0x400000,--build-id=none,-e,main
