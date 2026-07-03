@@ -114,6 +114,7 @@ int main(void) {
                 ball.dx = -ball.dx + 32;    /* Speed up slightly each hit */
                 /* Add english based on where the paddle was struck */
                 ball.dy += ((by + ball_size / 2) - (left_y + paddle_h / 2)) << 4;
+                sound(440, 40);
             }
 
             /* Right paddle */
@@ -122,6 +123,7 @@ int main(void) {
                 ball.dx > 0) {
                 ball.dx = -(ball.dx + 32);
                 ball.dy += ((by + ball_size / 2) - (right_y + paddle_h / 2)) << 4;
+                sound(440, 40);
             }
 
             /* Clamp vertical speed */
@@ -129,8 +131,8 @@ int main(void) {
             if (ball.dy < -(6 << 8)) ball.dy = -(6 << 8);
 
             /* Scoring */
-            if (bx < -ball_size)  { score_r++; ball.x = (W/2) << 8; ball.y = (H/2) << 8; ball.dx =  4 << 8; ball.dy = (int)(prand() % 512) - 256; }
-            if (bx > W)           { score_l++; ball.x = (W/2) << 8; ball.y = (H/2) << 8; ball.dx = -(4 << 8); ball.dy = (int)(prand() % 512) - 256; }
+            if (bx < -ball_size)  { score_r++; sound(180, 250); ball.x = (W/2) << 8; ball.y = (H/2) << 8; ball.dx =  4 << 8; ball.dy = (int)(prand() % 512) - 256; }
+            if (bx > W)           { score_l++; sound(700, 150); ball.x = (W/2) << 8; ball.y = (H/2) << 8; ball.dx = -(4 << 8); ball.dy = (int)(prand() % 512) - 256; }
         }
 
         /* ──────── Render ──────── */

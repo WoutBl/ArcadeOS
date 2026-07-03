@@ -35,6 +35,10 @@ void msleep(unsigned int ms) {
     asm volatile("int $0x80" : : "a"(25), "b"(ms) : "memory");
 }
 
+void sound(int freq_hz, int ms) {
+    asm volatile("int $0x80" : : "a"(29), "b"(freq_hz), "c"(ms) : "memory");
+}
+
 int readdir_at(const char* path, int index, dirent_info_t* out) {
     int ret;
     asm volatile("int $0x80" : "=a"(ret)

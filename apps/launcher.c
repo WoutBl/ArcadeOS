@@ -106,12 +106,17 @@ int main(void) {
         unsigned short pressed = (unsigned short)(pad.buttons & ~prev_buttons);
         prev_buttons = pad.buttons;
 
-        if ((pressed & PAD_BTN_DOWN) && num_games > 0)
+        if ((pressed & PAD_BTN_DOWN) && num_games > 0) {
             selected = (selected + 1) % num_games;
-        if ((pressed & PAD_BTN_UP) && num_games > 0)
+            sound(600, 30);
+        }
+        if ((pressed & PAD_BTN_UP) && num_games > 0) {
             selected = (selected + num_games - 1) % num_games;
+            sound(600, 30);
+        }
 
         if ((pressed & (PAD_BTN_A | PAD_BTN_START)) && num_games > 0) {
+            sound(900, 80);
             char path[80] = "/games/";
             strcpy(path + 7, games[selected].name);
 

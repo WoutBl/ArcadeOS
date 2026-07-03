@@ -39,10 +39,14 @@ audio, no networking, xHCI is a stub, no real hardware testing yet.
 
 ## Also on the list
 
-- **Audio.** Still the biggest missing subsystem for anything that's
-  supposed to feel like a console. PC speaker beep first (cheap, works
-  everywhere), then a real backend — AC97 for QEMU, Intel HDA for whatever
-  actually ends up on real hardware.
+- ~~**Audio.**~~ **DONE (July 2026) — first pass.** `SYS_SOUND` syscall
+  (freq + duration square-wave tones) with two backends: AC97 PCM out
+  (48 kHz synthesized, `src/ac97.c`) preferred, PC speaker (PIT channel 2,
+  `src/pcspk.c`) fallback. All three games + the launcher have sound
+  effects now. Verified headless by capturing QEMU audio to WAV and
+  checking the spectrum. Still to do later: Intel HDA backend for real
+  motherboards, and PCM sample playback / mixing as part of the SDK work
+  (tones only for now).
 
 - **Graphics/GPU.** What I have today already renders through the
   framebuffer the graphics card exposes (VBE/LFB) — it's just unaccelerated

@@ -26,4 +26,5 @@ void audio_tone(uint32_t freq_hz, uint32_t ms) {
 
 void audio_tick(void) {
     pcspk_tick();
+    ac97_tick();
 }

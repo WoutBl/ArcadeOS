@@ -32,6 +32,10 @@ void msleep(unsigned int ms);
 /* List a directory. Returns 0 on success, -1 past the end. */
 int readdir_at(const char* path, int index, dirent_info_t* out);
 
+/* Play a square-wave tone: freq in Hz (0 stops any playing sound),
+ * duration in ms. Routed to AC97 PCM or the PC speaker by the kernel. */
+void sound(int freq_hz, int ms);
+
 /* Save data ("memory card"): whole-file write/read on the game volume.
  * name is a bare 8.3 filename, e.g. "SNAKE.SAV".
  * save_data returns 0 on success; load_data returns bytes read or -1. */

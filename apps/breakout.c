@@ -198,6 +198,7 @@ int main(void) {
                 if (by >= H) {
                     ball_active = 0;
                     lives--;
+                    sound(160, 300);
                     if (lives <= 0) {
                         game_over = 1;
                         if (score > high) { high = score; save_high(high); }
@@ -211,6 +212,7 @@ int main(void) {
                     
                     ball.y = (paddle_y - ball_size) << 8;
                     ball.dy = -ball.dy;
+                    sound(400, 30);
                     
                     /* English/Spin based on hit position */
                     int hit_pos = (bx + ball_size / 2) - (paddle_x + paddle_w / 2);
@@ -236,6 +238,7 @@ int main(void) {
                                     /* Break brick */
                                     bricks[r][c] = 0;
                                     bricks_remaining--;
+                                    sound(700 + (BRICK_ROWS - r) * 60, 30);
                                     score += (BRICK_ROWS - r) * 10; /* Higher bricks = more points */
                                     if (bricks_remaining == 0 && score > high) {
                                         high = score;   /* Board cleared: persist the win */

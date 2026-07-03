@@ -176,6 +176,7 @@ int main(void) {
                 for (int i = 0; i < snake_len; i++) {
                     if (new_head_x == snake_x[i] && new_head_y == snake_y[i]) {
                         game_over = 1;
+                        sound(150, 400);
                         if (score > high) { high = score; save_high(high); }
                     }
                 }
@@ -199,6 +200,7 @@ int main(void) {
                             snake_len++;
                         }
                         score++;
+                        sound(880, 50);
                         
                         spawn_apple(&apple_x, &apple_y, grid_w, grid_h, snake_len);
                         

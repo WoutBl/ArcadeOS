@@ -41,7 +41,7 @@ STAGE2 = $(BUILD)/stage2.bin
 # Kernel source files
 C_SOURCES = src/kernel.c src/vga.c src/serial.c src/fb.c src/console_gfx.c \
             src/keyboard.c src/gamepad.c src/pci.c src/usb.c src/uhci.c src/xhci.c \
-            src/ata.c src/ahci.c src/disk.c src/klog.c src/fat32.c src/fs.c src/clock.c src/heap.c src/idt.c \
+            src/ata.c src/ahci.c src/disk.c src/klog.c src/audio.c src/ac97.c src/pcspk.c src/fat32.c src/fs.c src/clock.c src/heap.c src/idt.c \
             src/string.c src/pmm.c src/paging.c src/task.c src/scheduler.c \
             src/syscall.c src/loader.c src/elf.c src/vfs.c src/devfs.c src/pipe.c
 
@@ -54,8 +54,11 @@ OBJECTS = $(ASM_OBJECTS) $(C_OBJECTS)
 LIBC_SOURCES = libc/syscall.c libc/stdio.c libc/string.c libc/console.c
 LIBC_OBJECTS = $(patsubst libc/%.c,$(BUILD)/libc_%.o,$(LIBC_SOURCES))
 
+# Game SDK (libarcade = SDK framework + libc in one archive)
+SDK_OBJECTS = $(BUILD)/sdk_arcade.o
+
 # Games / apps shipped on the FAT32 volume
-APPS = $(BUILD)/launcher.elf $(BUILD)/pong.elf $(BUILD)/snake.elf $(BUILD)/breakout.elf
+APPS = $(BUILD)/launcher.elf $(BUILD)/pong.elf $(BUILD)/snake.elf $(BUILD)/breakout.elf $(BUILD)/demo.elf
 
 # User app link flags: entry = main (no crt0), fixed base at 4 MiB
 APP_LDFLAGS = -Wl,-N,-Ttext=0x400000,--build-id=none,-e,main
@@ -101,13 +104,17 @@ $(BUILD)/%.o: src/%.c | $(BUILD)
 $(BUILD)/libc_%.o: libc/%.c | $(BUILD)
 	$(CC) -c -ffreestanding -O2 -Wall -Wextra $(NOFPU) $< -o $@
 
-# Create Libc Archive (static library)
-$(BUILD)/libc.a: $(LIBC_OBJECTS)
-	$(AR) rcs $@ $(LIBC_OBJECTS)
+# Compile the SDK
+$(BUILD)/sdk_arcade.o: sdk/arcade.c sdk/arcade.h | $(BUILD)
+	$(CC) -c -Os -ffreestanding -Wall -Wextra $(NOFPU) sdk/arcade.c -o $@
+
+# Create the game SDK archive (framework + libc)
+$(BUILD)/libarcade.a: $(SDK_OBJECTS) $(LIBC_OBJECTS)
+	$(AR) rcs $@ $(SDK_OBJECTS) $(LIBC_OBJECTS)
 
 # Compile Ring 3 User Apps
-$(BUILD)/%.elf: apps/%.c $(BUILD)/libc.a | $(BUILD)
-	$(CC) -Os -s -ffreestanding -nostdlib -fno-builtin $(NOFPU) $< $(BUILD)/libc.a -o $@ $(APP_LDFLAGS)
+$(BUILD)/%.elf: apps/%.c $(BUILD)/libarcade.a | $(BUILD)
+	$(CC) -Os -s -ffreestanding -nostdlib -fno-builtin $(NOFPU) $< $(BUILD)/libarcade.a -o $@ $(APP_LDFLAGS)
 
 # Create the bootable FAT32 game volume: bootloader + kernel in the
 # reserved sectors, launcher + games in the root directory
@@ -117,6 +124,9 @@ $(DISK): $(STAGE1) $(STAGE2) $(KERNEL) $(APPS) tools/mkfat32.py
 # Run in QEMU with a visible window
 run: $(DISK)
 	qemu-system-x86_64 -m 128 \
+		-audiodev coreaudio,id=snd0 \
+		-device AC97,audiodev=snd0 \
+		-machine pcspk-audiodev=snd0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \
 		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
@@ -131,6 +141,9 @@ run: $(DISK)
 # While the VM runs, macOS loses the controller; unplug/replug returns it.
 run-ds4: $(DISK)
 	qemu-system-x86_64 -m 128 \
+		-audiodev coreaudio,id=snd0 \
+		-device AC97,audiodev=snd0 \
+		-machine pcspk-audiodev=snd0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \
 		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
@@ -142,6 +155,9 @@ run-ds4: $(DISK)
 # Run headless: serial log + QEMU monitor socket (for screendump/sendkey)
 run-headless: $(DISK)
 	qemu-system-x86_64 -m 128 \
+		-audiodev wav,id=snd0,path=audio-out.wav \
+		-device AC97,audiodev=snd0 \
+		-machine pcspk-audiodev=snd0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \
 		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
@@ -154,6 +170,8 @@ run-headless: $(DISK)
 # Legacy IDE attach: exercises the ATA PIO fallback path
 run-ide: $(DISK)
 	qemu-system-x86_64 -m 128 \
+		-audiodev wav,id=snd0,path=audio-out.wav \
+		-machine pcspk-audiodev=snd0 \
 		-drive file=$(DISK),format=raw,if=ide,index=0,media=disk \
 		-boot c -usb \
 		-serial file:serial.log \
@@ -163,7 +181,7 @@ run-ide: $(DISK)
 
 # Clean build files
 clean:
-	rm -f $(OBJECTS) $(KERNEL) $(KERNEL_ELF) serial.log qemu-monitor.sock arcadeos.iso
+	rm -f $(OBJECTS) $(KERNEL) $(KERNEL_ELF) serial.log qemu-monitor.sock audio-out.wav arcadeos.iso
 	rm -rf $(BUILD) isodir
 
 # Clean everything including the game volume

@@ -5,11 +5,14 @@
  * `-device AC97` emulates the classic Intel 82801AA. Both register banks
  * are I/O ports: BAR0 = NAM (mixer), BAR1 = NABM (bus master).
  *
- * Design: a tone is synthesized up-front as a 48 kHz stereo 16-bit
- * square wave into a contiguous DMA area, described by a Buffer
- * Descriptor List. The last descriptor carries no follow-up, so the
- * engine halts by itself when the tone ends — no interrupts, no refill
- * logic. Starting a new tone resets the PCM OUT box and refills.
+ * Design: an ALWAYS-RUNNING ring. The DMA engine is started once at init
+ * on a 32-page ring of silence and never stopped: the PIT tick keeps the
+ * Last Valid Index one buffer behind the hardware's Current Index (so
+ * the engine never halts) and re-silences pages the hardware finished.
+ * Playing a tone just writes square-wave samples into the ring ahead of
+ * the hardware position — no stream open/close per sound, which host
+ * audio backends (e.g. macOS coreaudio) punish with glitches and stalls,
+ * and no busy-waits in the syscall path.
  */
 
 #include "audio.h"
@@ -25,7 +28,7 @@
 
 /* NABM (bus master) registers — PCM OUT box */
 #define NABM_PO_BDBAR    0x10   /* Buffer descriptor list base (dword) */
-#define NABM_PO_CIV      0x14   /* Current index (byte) */
+#define NABM_PO_CIV      0x14   /* Current index (byte, read-only) */
 #define NABM_PO_LVI      0x15   /* Last valid index (byte) */
 #define NABM_PO_SR       0x16   /* Status (word) */
 #define NABM_PO_CR       0x1B   /* Control (byte) */
@@ -37,39 +40,61 @@
 #define SAMPLE_RATE      48000
 #define AMPLITUDE        9000
 
-/* DMA budget: 1 page BDL + 32 data pages = 32 KiB x 4... (32 pages =
- * 128 KiB = 16384 stereo frames per page? no:) 32 pages of 4 KiB hold
- * 32 * 1024 stereo frames = ~680 ms at 48 kHz. */
-#define DATA_PAGES       32
+/* Ring geometry: 32 pages x 1024 stereo frames = ~680 ms of audio */
+#define RING_PAGES       32
 #define FRAMES_PER_PAGE  (4096 / 4)          /* 16-bit stereo = 4 B/frame */
-#define MAX_FRAMES       (DATA_PAGES * FRAMES_PER_PAGE)
+#define RING_FRAMES      (RING_PAGES * FRAMES_PER_PAGE)
 
 /* BDL entry: buffer pointer + count of 16-bit samples + flags */
 typedef struct {
     uint32_t addr;
     uint16_t count;      /* Number of 16-bit samples (not frames!) */
-    uint16_t flags;      /* Bit 15 = IOC, bit 14 = BUP (buffer underrun = ok) */
+    uint16_t flags;
 } __attribute__((packed)) ac97_bdl_entry_t;
 
 static uint16_t nam  = 0;    /* I/O base: mixer */
 static uint16_t nabm = 0;    /* I/O base: bus master */
 static ac97_bdl_entry_t* bdl = 0;
-static int16_t* pcm  = 0;    /* DATA_PAGES contiguous pages */
+static int16_t* pcm  = 0;    /* RING_PAGES contiguous pages */
 static uint64_t pcm_phys = 0;
 static int present = 0;
+static uint8_t prev_civ = 0;
 
 int ac97_is_present(void) { return present; }
 
-static inline uint16_t nam_read(uint8_t reg)              { return inw(nam + reg); }
-static inline void nam_write(uint8_t reg, uint16_t v)     { outw(nam + reg, v); }
+static inline void nam_write(uint8_t reg, uint16_t v) { outw(nam + reg, v); }
+
+/* Zero a whole ring page (one BDL buffer worth of silence) */
+static void silence_page(int page) {
+    memset(pcm + page * FRAMES_PER_PAGE * 2, 0, 4096);
+}
 
 void ac97_stop(void) {
     if (!present) return;
-    outb(nabm + NABM_PO_CR, 0);              /* Clear run */
-    outb(nabm + NABM_PO_CR, PO_CR_RR);       /* Reset the PCM OUT box */
-    uint32_t deadline = system_ticks + 100;
-    while ((inb(nabm + NABM_PO_CR) & PO_CR_RR) && system_ticks < deadline)
-        ;
+    /* The engine keeps running — playing silence IS the stopped state */
+    for (int p = 0; p < RING_PAGES; p++)
+        silence_page(p);
+}
+
+/*
+ * PIT tick (1 kHz): keep the ring alive. Each page is ~21 ms of audio,
+ * so a 1 ms cadence has plenty of margin.
+ */
+void ac97_tick(void) {
+    if (!present) return;
+
+    uint8_t civ = inb(nabm + NABM_PO_CIV);
+
+    /* Re-silence the pages the hardware finished since last tick, so a
+     * tone's samples never come around again on the next ring lap */
+    while (prev_civ != civ) {
+        silence_page(prev_civ);
+        prev_civ = (uint8_t)((prev_civ + 1) % RING_PAGES);
+    }
+
+    /* Keep LVI one buffer behind CIV: the engine never reaches it, so
+     * it never halts */
+    outb(nabm + NABM_PO_LVI, (uint8_t)((civ + RING_PAGES - 1) % RING_PAGES));
 }
 
 void ac97_tone(uint32_t freq_hz, uint32_t ms) {
@@ -79,36 +104,36 @@ void ac97_tone(uint32_t freq_hz, uint32_t ms) {
         return;
     }
 
-    ac97_stop();
+    /* Replace whatever is queued: silence the ring, then write the new
+     * tone starting one page ahead of the hardware position (~0-21 ms
+     * latency). Interrupts off so the tick can't advance CIV mid-write;
+     * IF is restored to whatever the caller had (syscall handlers run
+     * with interrupts already disabled). */
+    uint64_t rflags;
+    asm volatile("pushfq\n\tpop %0" : "=r"(rflags));
+    cli();
 
-    /* Synthesize the square wave: 48 kHz, stereo, 16-bit */
+    for (int p = 0; p < RING_PAGES; p++)
+        silence_page(p);
+
+    uint8_t civ = inb(nabm + NABM_PO_CIV);
+    uint32_t start = ((uint32_t)((civ + 1) % RING_PAGES)) * FRAMES_PER_PAGE;
+
     uint32_t frames = (SAMPLE_RATE / 1000) * ms;
-    if (frames > MAX_FRAMES) frames = MAX_FRAMES;
+    uint32_t budget = (RING_PAGES - 2) * FRAMES_PER_PAGE;  /* Margin: 2 pages */
+    if (frames > budget) frames = budget;
+
     uint32_t half_period = SAMPLE_RATE / (freq_hz * 2);
     if (half_period == 0) half_period = 1;
 
     for (uint32_t f = 0; f < frames; f++) {
         int16_t s = ((f / half_period) & 1) ? -AMPLITUDE : AMPLITUDE;
-        pcm[f * 2]     = s;   /* Left */
-        pcm[f * 2 + 1] = s;   /* Right */
+        uint32_t pos = (start + f) % RING_FRAMES;
+        pcm[pos * 2]     = s;   /* Left */
+        pcm[pos * 2 + 1] = s;   /* Right */
     }
 
-    /* Build the BDL: one entry per data page */
-    uint32_t entries = (frames + FRAMES_PER_PAGE - 1) / FRAMES_PER_PAGE;
-    for (uint32_t e = 0; e < entries; e++) {
-        uint32_t first = e * FRAMES_PER_PAGE;
-        uint32_t n = frames - first;
-        if (n > FRAMES_PER_PAGE) n = FRAMES_PER_PAGE;
-        bdl[e].addr  = (uint32_t)(pcm_phys + (uint64_t)first * 4);
-        bdl[e].count = (uint16_t)(n * 2);            /* samples, not frames */
-        bdl[e].flags = (e == entries - 1) ? 0x4000 : 0;   /* BUP on last */
-    }
-
-    outb(nabm + NABM_PO_CR, 0);
-    outl(nabm + NABM_PO_BDBAR, (uint32_t)(uintptr_t)bdl);
-    outb(nabm + NABM_PO_LVI, (uint8_t)(entries - 1));
-    outw(nabm + NABM_PO_SR, 0x1C);                   /* Clear status bits */
-    outb(nabm + NABM_PO_CR, PO_CR_RPBM);             /* Run */
+    if (rflags & 0x200) sti();
 }
 
 int ac97_init(void) {
@@ -129,13 +154,32 @@ int ac97_init(void) {
     nam_write(NAM_MASTER_VOL,  0x0000);
     nam_write(NAM_PCM_OUT_VOL, 0x0808);
 
-    /* One page for the BDL, DATA_PAGES contiguous pages for PCM data */
+    /* One page for the BDL, RING_PAGES contiguous pages of PCM silence */
     uint64_t bdl_page = pmm_alloc_page();
-    pcm_phys = pmm_alloc_pages(DATA_PAGES);
+    pcm_phys = pmm_alloc_pages(RING_PAGES);
     if (bdl_page == 0 || pcm_phys == 0) return 0;
     bdl = (ac97_bdl_entry_t*)(uintptr_t)bdl_page;
     pcm = (int16_t*)(uintptr_t)pcm_phys;
     memset(bdl, 0, 4096);
+    memset(pcm, 0, RING_PAGES * 4096);
+
+    /* Static BDL: entry i -> ring page i, full page, no flags */
+    for (int i = 0; i < RING_PAGES; i++) {
+        bdl[i].addr  = (uint32_t)(pcm_phys + (uint64_t)i * 4096);
+        bdl[i].count = FRAMES_PER_PAGE * 2;   /* samples, not frames */
+        bdl[i].flags = 0;
+    }
+
+    /* Reset the PCM OUT box once, program the ring, run forever */
+    outb(nabm + NABM_PO_CR, PO_CR_RR);
+    uint32_t deadline = system_ticks + 100;
+    while ((inb(nabm + NABM_PO_CR) & PO_CR_RR) && system_ticks < deadline)
+        ;
+    outl(nabm + NABM_PO_BDBAR, (uint32_t)(uintptr_t)bdl);
+    outb(nabm + NABM_PO_LVI, RING_PAGES - 1);
+    outw(nabm + NABM_PO_SR, 0x1C);
+    prev_civ = 0;
+    outb(nabm + NABM_PO_CR, PO_CR_RPBM);
 
     present = 1;
 
@@ -144,6 +188,6 @@ int ac97_init(void) {
     terminal_writehex(nam);
     terminal_writestring(" NABM 0x");
     terminal_writehex(nabm);
-    terminal_writestring(" (48 kHz PCM out)\n");
+    terminal_writestring(" (48 kHz ring, always running)\n");
     return 1;
 }

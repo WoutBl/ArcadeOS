@@ -35,5 +35,6 @@ int  ac97_init(void);
 int  ac97_is_present(void);
 void ac97_tone(uint32_t freq_hz, uint32_t ms);
 void ac97_stop(void);
+void ac97_tick(void);
 
 #endif /* AUDIO_H */
