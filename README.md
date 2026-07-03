@@ -1,0 +1,123 @@
+# ArcadeOS
+
+A bare-metal x86 gaming console operating system, architected like a modern
+console: the kernel boots straight into a graphical game launcher, games are
+ELF binaries loaded from a FAT32 game volume and executed in Ring 3, and all
+hardware access (graphics, controllers) goes through syscalls.
+
+Built on the previously project (name: OS2.0) base kernel: GDT/IDT, bitmap PMM, identity-mapped
+paging with per-process page directories, preemptive round-robin scheduler,
+TSS-based Ring 3 support, int 0x80 syscalls, VFS + devfs, and ATA PIO.
+
+## Architecture
+
+```
+ Ring 3                        Ring 0
+┌─────────────────┐   int 0x80  ┌───────────────────────────────────┐
+│ launcher.elf     │◄──────────►│ syscall.c  (gfx/pad/fs/timing)    │
+│ pong.elf         │            │                                   │
+│ (libc/console.h) │            │ console_gfx.c ── fb.c (LFB)       │
+└─────────────────┘            │ gamepad.c ── keyboard.c (IRQ1)    │
+                               │           └─ usb.c/uhci.c/xhci.c  │
+                               │ vfs.c ─┬─ fat32.c ── ata.c        │
+                               │        ├─ devfs.c                 │
+                               │        └─ fs.c (RAM fs)           │
+                               │ scheduler.c / task.c / loader.c   │
+                               │ paging.c / pmm.c / heap.c         │
+                               └───────────────────────────────────┘
+```
+
+### Subsystems
+
+| Subsystem | Files | Notes |
+|---|---|---|
+| Framebuffer | `fb.c`, `boot.asm` | 640x480x32 LFB requested from GRUB (multiboot video fields); mapped into the identity map by `paging.c` |
+| Graphics API | `console_gfx.c/h` | Double-buffered software renderer: clear, rects, lines, sprites (alpha-keyed), 8x8 font text; `gfx_present_buffer()` backs the user-space present syscall |
+| Boot console | `vga.c` | The classic terminal API now renders glyphs onto the framebuffer (VGA text fallback kept); all output mirrored to COM1 (`serial.c`) |
+| Controllers | `gamepad.c` | Merges sources into 4 logical pads; pad 0 is keyboard-mapped; press-edge latching so slow frame loops never miss a tap |
+| USB host | `pci.c`, `usb.c`, `uhci.c`, `xhci.c` | Full UHCI transfer engine: frame list + QH/TD schedule, synchronous control transfers (enumeration: GET_DESCRIPTOR / SET_ADDRESS / SET_CONFIGURATION), polled interrupt IN pipes for HID reports; DualShock 4 reports decoded in `usb.c` and merged into pad 0; xHCI remains an architectural stub |
+| Storage | `fat32.c` | FAT32 (8.3 names) over ATA PIO, mounted at `/games`; write path (cluster alloc, FAT mirroring, directory updates) backs the save-data API |
+| Save data | `fat32.c`, `syscall.c` | "Memory card" semantics: whole-file `SYS_SAVE`/`SYS_LOAD` on the game volume; games persist high scores across power cycles |
+| Game loading | `loader.c` | ELF loaded via VFS into a fresh page directory, 16 KiB user stack, Ring 3 entry via iret |
+| Crash safety | `paging.c` | A Ring 3 page fault kills the game and returns to the launcher instead of panicking the console |
+
+### Console syscalls (int 0x80)
+
+| # | Name | Purpose |
+|---|---|---|
+| 21 | `SYS_GFX_INFO` | Framebuffer geometry (`gfx_info_t`) |
+| 22 | `SYS_GFX_PRESENT` | Blit a full-screen user pixel buffer |
+| 23 | `SYS_PAD_READ` | Controller state (`pad_state_t`), polls USB |
+| 24 | `SYS_TICKS` | Milliseconds since boot |
+| 25 | `SYS_MSLEEP` | Sleep (PIT-driven, CPU halts) |
+| 26 | `SYS_READDIR` | Directory listing (used by the launcher) |
+| 27 | `SYS_SAVE` | Whole-file save to the game volume (max 64 KiB) |
+| 28 | `SYS_LOAD` | Whole-file load; returns bytes read |
+
+User-space API: `libc/console.h` (syscall wrappers + software drawing helpers).
+Shared ABI structs: `include/console_abi.h`.
+
+## Building
+
+Prerequisites (macOS): `brew install nasm i686-elf-gcc i686-elf-grub xorriso qemu`
+
+```sh
+make            # kernel + arcadeos.iso + arcadeos.img (FAT32 game volume)
+make run        # boot in QEMU with a window
+make run-headless   # headless: serial.log + qemu-monitor.sock
+```
+
+`tools/mkfat32.py` builds the FAT32 volume and copies `LAUNCHER.ELF` and the
+game ELFs into its root. Add a new game by dropping `apps/<name>.c` in, adding
+`$(BUILD)/<name>.elf` to `APPS` in the Makefile — the launcher lists every
+`*.ELF` on the volume automatically.
+
+Note: rebuilding regenerates `arcadeos.img`, which wipes save files along with
+it. Keep a copy of the image if you care about your high scores.
+
+## Controls (pad 0, keyboard-mapped)
+
+| Input | Key |
+|---|---|
+| D-pad | Arrow keys |
+| Left stick | WASD |
+| A / B / X / Y | X / Z / C / V |
+| START / SELECT | Enter / Tab |
+| L1 / R1 | Q / E |
+
+Launcher: up/down select, A or START to play. Pong: SELECT or B quits back
+to the launcher, START pauses.
+
+## Real controller (DualShock 4 over micro-USB)
+
+The UHCI driver enumerates a passed-through DualShock 4 (vendor 0x054C,
+product 0x05C4/0x09CC) and maps it to pad 0 alongside the keyboard:
+Cross/Circle/Square/Triangle → A/B/X/Y, Options/Share → START/SELECT,
+D-pad hat + both analog sticks + trigger axes.
+
+```sh
+sudo make run-ds4    # root required, see below
+```
+
+On macOS the Apple HID kernel driver owns the controller's USB interface;
+an unprivileged QEMU can attach the device (it enumerates fine) but every
+interrupt transfer fails with a timeout. Running QEMU as root lets libusb
+seize the interface (`USBInterfaceOpenSeize`). While the VM runs, macOS
+does not see the controller; unplug/replug hands it back. Adjust the
+product id in the Makefile for a v1 pad (0x05C4).
+
+## Games
+
+- `apps/launcher.c` – the home screen (Ring 3 init process)
+- `apps/pong.c` – reference title: pad input + fixed-point physics + present
+- `apps/snake.c` – grid movement, screen wrapping, persistent high score
+- `apps/breakout.c` – brick grid sized from `gfx_info`, persistent high score
+
+Games persist data with `save_data("NAME.SAV", &blob, len)` /
+`load_data(...)` from `libc/console.h` — whole-file reads/writes of 8.3-named
+files on the game volume, surviving reboots.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The embedded 8x8 font is derived from the
+public-domain `font8x8` glyph set.

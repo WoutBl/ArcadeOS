@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+isodir/
+*.bin
+*.iso
+*.img
+*.o
+
+# Runtime / debug output
+serial.log
+qemu*.log
+qemu-monitor.sock
+
+# Host noise
+.DS_Store
+__pycache__/
