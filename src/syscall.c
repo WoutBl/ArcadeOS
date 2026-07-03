@@ -603,6 +603,14 @@ static void syscall_handler(registers_t* regs) {
             break;
         }
 
+        case SYS_SCORE: {
+            /* Live score report for the REST API (/api/status) */
+            if (current_task)
+                score_report((int)regs->ebx, current_task->id, current_task->name);
+            regs->eax = 0;
+            break;
+        }
+
         default:
             /* Unknown syscall */
             terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));

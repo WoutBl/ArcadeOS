@@ -28,6 +28,14 @@ void klog_putc(char c) {
     klog_dirty = 1;
 }
 
+int klog_read(char* out, int maxlen) {
+    if (!out || maxlen <= 0) return 0;
+    uint32_t n = klog_len;
+    if (n > (uint32_t)maxlen) n = (uint32_t)maxlen;
+    memcpy(out, klog_buf, n);
+    return (int)n;
+}
+
 void klog_idle_flush(void) {
     if (!klog_dirty) return;
     if (!fat32_available()) return;

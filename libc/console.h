@@ -36,6 +36,10 @@ int readdir_at(const char* path, int index, dirent_info_t* out);
  * duration in ms. Routed to AC97 PCM or the PC speaker by the kernel. */
 void sound(int freq_hz, int ms);
 
+/* Report the current score to the kernel (served by the REST API while
+ * the game runs). The SDK calls this automatically via arcade_t.score. */
+void report_score(int score);
+
 /* Save data ("memory card"): whole-file write/read on the game volume.
  * name is a bare 8.3 filename, e.g. "SNAKE.SAV".
  * save_data returns 0 on success; load_data returns bytes read or -1. */

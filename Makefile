@@ -41,7 +41,7 @@ STAGE2 = $(BUILD)/stage2.bin
 # Kernel source files
 C_SOURCES = src/kernel.c src/vga.c src/serial.c src/fb.c src/console_gfx.c \
             src/keyboard.c src/gamepad.c src/pci.c src/usb.c src/uhci.c src/xhci.c \
-            src/ata.c src/ahci.c src/disk.c src/klog.c src/audio.c src/ac97.c src/pcspk.c src/fat32.c src/fs.c src/clock.c src/heap.c src/idt.c \
+            src/ata.c src/ahci.c src/disk.c src/klog.c src/audio.c src/ac97.c src/pcspk.c src/net.c src/rtl8139.c src/fat32.c src/fs.c src/clock.c src/heap.c src/idt.c \
             src/string.c src/pmm.c src/paging.c src/task.c src/scheduler.c \
             src/syscall.c src/loader.c src/elf.c src/vfs.c src/devfs.c src/pipe.c
 
@@ -58,7 +58,7 @@ LIBC_OBJECTS = $(patsubst libc/%.c,$(BUILD)/libc_%.o,$(LIBC_SOURCES))
 SDK_OBJECTS = $(BUILD)/sdk_arcade.o
 
 # Games / apps shipped on the FAT32 volume
-APPS = $(BUILD)/launcher.elf $(BUILD)/pong.elf $(BUILD)/snake.elf $(BUILD)/breakout.elf $(BUILD)/starcatch.elf
+APPS = $(BUILD)/launcher.elf $(BUILD)/pong.elf $(BUILD)/snake.elf $(BUILD)/breakout.elf $(BUILD)/starcatch.elf $(BUILD)/blaster.elf
 
 # User app link flags: entry = main (no crt0), fixed base at 4 MiB
 APP_LDFLAGS = -Wl,-N,-Ttext=0x400000,--build-id=none,-e,main
@@ -129,6 +129,8 @@ run: $(DISK)
 		-audiodev coreaudio,id=snd0 \
 		-device AC97,audiodev=snd0 \
 		-machine pcspk-audiodev=snd0 \
+		-netdev user,id=n0,hostfwd=tcp::8080-:80 \
+		-device rtl8139,netdev=n0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \
 		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
@@ -146,6 +148,8 @@ run-ds4: $(DISK)
 		-audiodev coreaudio,id=snd0 \
 		-device AC97,audiodev=snd0 \
 		-machine pcspk-audiodev=snd0 \
+		-netdev user,id=n0,hostfwd=tcp::8080-:80 \
+		-device rtl8139,netdev=n0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \
 		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
@@ -160,6 +164,8 @@ run-headless: $(DISK)
 		-audiodev wav,id=snd0,path=audio-out.wav \
 		-device AC97,audiodev=snd0 \
 		-machine pcspk-audiodev=snd0 \
+		-netdev user,id=n0,hostfwd=tcp::8080-:80 \
+		-device rtl8139,netdev=n0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \
 		-device ide-hd,drive=gamedisk,bus=ahci0.0 \

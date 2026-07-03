@@ -51,6 +51,7 @@ int arcade_init(arcade_t* a) {
     a->held2     = 0;
     a->frame    = 0;
     a->frame_ms = 16;                 /* ~60 FPS */
+    a->score    = 0;
 
     pad_read(0, &a->pad);
     a->held = a->pad.buttons;
@@ -61,8 +62,15 @@ int arcade_init(arcade_t* a) {
     return 0;
 }
 
+static int last_reported_score = -1;
+
 int arcade_frame(arcade_t* a) {
     gfx_present(framebuf);
+
+    if (a->score != last_reported_score) {
+        report_score(a->score);
+        last_reported_score = a->score;
+    }
 
     msleep(a->frame_ms);
     a->frame++;

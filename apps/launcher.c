@@ -13,12 +13,31 @@
 #define MAX_GAMES 16
 
 typedef struct {
-    char name[64];
+    char name[64];        /* Filename on the volume (8.3) */
+    char title[32];       /* Pretty display name */
     unsigned int size;
 } game_entry_t;
 
 static game_entry_t games[MAX_GAMES];
 static int num_games = 0;
+
+/* Last-played persistence (launcher save slot 0) */
+#define LP_MAGIC 0x4C41554Eu
+typedef struct { unsigned int magic; char name[64]; } lastplayed_t;
+
+/* Pretty titles: the 8.3 filesystem truncates long names, so map the
+ * known ones back; everything else just loses the .ELF extension. */
+static void pretty_title(const char* file, char* out) {
+    static const char* fixups[][2] = {
+        { "STARCATC.ELF", "STARCATCH" },
+    };
+    for (unsigned int i = 0; i < sizeof(fixups)/sizeof(fixups[0]); i++) {
+        if (strcmp(file, fixups[i][0]) == 0) { strcpy(out, fixups[i][1]); return; }
+    }
+    int n = 0;
+    while (file[n] && file[n] != '.' && n < 31) { out[n] = file[n]; n++; }
+    out[n] = '\0';
+}
 
 static int ends_with_elf(const char* name) {
     int len = (int)strlen(name);
@@ -35,19 +54,30 @@ static void scan_games(void) {
         if (strcmp(de.name, "LAUNCHER.ELF") == 0) continue;
 
         strcpy(games[num_games].name, de.name);
+        pretty_title(de.name, games[num_games].title);
         games[num_games].size = de.size;
         num_games++;
     }
 }
 
-static void draw_ui(surface_t* s, int selected, unsigned int t) {
+static void draw_ui(surface_t* s, int selected, int last_idx, unsigned int t) {
     surf_clear(s, rgb(10, 12, 34));
 
     /* Header */
     surf_fill_rect(s, 0, 0, s->w, 64, rgb(18, 22, 60));
     surf_fill_rect(s, 0, 64, s->w, 3, rgb(80, 120, 255));
     surf_draw_text(s, 24, 20, "ARCADE OS", rgb(255, 255, 255), SURF_TRANSPARENT, 3);
-    surf_draw_text(s, s->w - 168, 28, "GAME LIBRARY", rgb(120, 140, 220), SURF_TRANSPARENT, 1);
+    surf_draw_text(s, s->w - 168, 22, "GAME LIBRARY", rgb(120, 140, 220), SURF_TRANSPARENT, 1);
+    {
+        char cnt[16];
+        int n = 0;
+        int v = num_games;
+        if (v == 0) cnt[n++] = '0';
+        while (v && n < 8) { cnt[n++] = (char)('0' + v % 10); v /= 10; }
+        for (int i = 0; i < n / 2; i++) { char c = cnt[i]; cnt[i] = cnt[n-1-i]; cnt[n-1-i] = c; }
+        strcpy(cnt + n, " GAMES");
+        surf_draw_text(s, s->w - 168, 38, cnt, rgb(90, 105, 170), SURF_TRANSPARENT, 1);
+    }
 
     /* Game list */
     int y = 100;
@@ -67,9 +97,24 @@ static void draw_ui(surface_t* s, int selected, unsigned int t) {
             surf_draw_rect(s, 24, y - 8, s->w - 48, row_h, rgb(120, 160, 255));
             surf_draw_text(s, 36, y, ">", rgb(255, 220, 80), SURF_TRANSPARENT, 2);
         }
-        surf_draw_text(s, 64, y, games[i].name,
+        surf_draw_text(s, 64, y, games[i].title,
                        i == selected ? rgb(255, 255, 255) : rgb(150, 160, 200),
                        SURF_TRANSPARENT, 2);
+
+        /* Size (KiB), right aligned; LAST PLAYED badge */
+        {
+            char kb[16];
+            unsigned int v = games[i].size / 1024;
+            if (v == 0) v = 1;
+            int n = 0;
+            while (v && n < 8) { kb[n++] = (char)('0' + v % 10); v /= 10; }
+            for (int j = 0; j < n / 2; j++) { char c = kb[j]; kb[j] = kb[n-1-j]; kb[n-1-j] = c; }
+            strcpy(kb + n, " KB");
+            surf_draw_text(s, s->w - 104, y + 4, kb, rgb(90, 105, 170), SURF_TRANSPARENT, 1);
+        }
+        if (i == last_idx)
+            surf_draw_text(s, s->w - 204, y + 4, "LAST PLAYED",
+                           rgb(120, 220, 160), SURF_TRANSPARENT, 1);
         y += 48;
     }
 
@@ -88,7 +133,22 @@ int main(void) {
 
     scan_games();
 
+    /* Resume on the last-played game */
     int selected = 0;
+    int last_idx = -1;
+    {
+        lastplayed_t lp;
+        if (arcade_load("LAUNCH", 0, &lp, sizeof(lp)) == (int)sizeof(lp) &&
+            lp.magic == LP_MAGIC) {
+            for (int i = 0; i < num_games; i++) {
+                if (strcmp(games[i].name, lp.name) == 0) {
+                    selected = i;
+                    last_idx = i;
+                    break;
+                }
+            }
+        }
+    }
 
     while (arcade_frame(&a)) {
         if ((a.pressed & PAD_BTN_DOWN) && num_games > 0) {
@@ -105,6 +165,13 @@ int main(void) {
             char path[80] = "/games/";
             strcpy(path + 7, games[selected].name);
 
+            /* Remember the choice before handing over the console */
+            lastplayed_t lp;
+            lp.magic = LP_MAGIC;
+            strcpy(lp.name, games[selected].name);
+            arcade_save("LAUNCH", 0, &lp, sizeof(lp));
+            last_idx = selected;
+
             char* game_argv[] = { path, (char*)0 };
             int pid = spawn(path, game_argv);
             if (pid >= 0) {
@@ -114,7 +181,7 @@ int main(void) {
             }
         }
 
-        draw_ui(&a.screen, selected, ticks());
+        draw_ui(&a.screen, selected, last_idx, ticks());
     }
 
     return 0;

@@ -37,13 +37,14 @@ TSS-based Ring 3 support, int 0x80 syscalls, VFS + devfs, and ATA PIO.
 |---|---|---|
 | Bootloader | `boot/stage1.asm`, `boot/stage2.asm` | Two-stage BIOS bootloader living in the FAT32 reserved sectors: stage 1 is the volume boot record around the BPB; stage 2 enables A20, collects the E820 memory map, loads the kernel flat binary to 1 MiB (INT 13h chunks + protected-mode copies), sets a 640x480x32 VBE linear-framebuffer mode, builds identity page tables (first 4 GiB, 2 MiB pages), and enters **long mode** with a multiboot-compatible boot info struct |
 | Framebuffer | `fb.c`, `boot.asm` | 640x480x32 LFB set up by the bootloader via VBE; mapped into the identity map by `paging.c` |
-| Graphics API | `console_gfx.c/h` | Double-buffered software renderer: clear, rects, lines, sprites (alpha-keyed), 8x8 font text; `gfx_present_buffer()` backs the user-space present syscall |
+| Graphics API | `console_gfx.c/h`, `fb.c` | Double-buffered software renderer: clear, rects, lines, sprites (alpha-keyed), 8x8 font text; presents are **tear-free page flips** via the Bochs display interface (double-height VRAM + Y-offset) with a plain-VBE blit fallback |
 | Boot console | `vga.c` | The classic terminal API now renders glyphs onto the framebuffer (VGA text fallback kept); all output mirrored to COM1 (`serial.c`) |
 | Controllers | `gamepad.c` | Merges sources into 4 logical pads; the keyboard is split into TWO virtual pads for local 2-player (pad 0 = arrows/XZCV, pad 1 = WASD + R/T/F/G); USB pads merge into pad 0; press-edge latching so slow frame loops never miss a tap |
 | USB host | `pci.c`, `usb.c`, `uhci.c`, `xhci.c` | Full UHCI transfer engine: frame list + QH/TD schedule, synchronous control transfers (enumeration: GET_DESCRIPTOR / SET_ADDRESS / SET_CONFIGURATION), polled interrupt IN pipes for HID reports; DualShock 4 reports decoded in `usb.c` and merged into pad 0; xHCI remains an architectural stub |
 | Storage | `ahci.c`, `ata.c`, `disk.c`, `fat32.c` | AHCI (SATA) driver preferred — what real hardware exposes — with legacy ATA PIO as fallback, dispatched through `disk.c`; FAT32 (8.3 names) mounted at `/games`; write path (cluster alloc, FAT mirroring, directory updates) backs the save-data API |
 | Save data | `fat32.c`, `syscall.c` | "Memory card" semantics: whole-file `SYS_SAVE`/`SYS_LOAD` on the game volume; games persist high scores across power cycles |
 | Kernel log | `klog.c`, `serial.c` | Everything mirrored to COM1 also lands in a 32 KiB ring buffer, flushed to `KERNEL.LOG` on the game volume by the idle task (~2 s cadence) — boot logs survive on disk even without a serial cable |
+| Networking | `rtl8139.c`, `net.c` | RTL8139 NIC (polled from the idle task) + minimal server stack: ARP, IPv4, ICMP echo, single-connection TCP, and an **HTTP REST API** on port 80 — `/api/status`, `/api/games`, `/api/scores`, `/api/log`. With QEMU: `curl http://localhost:8080/api/status` |
 | Audio | `audio.c`, `ac97.c`, `pcspk.c` | `SYS_SOUND` square-wave tones (freq + duration): synthesized 48 kHz stereo PCM through the AC97 codec's DMA engine when present, PC speaker (PIT channel 2) fallback otherwise; launcher and all games have sound effects |
 | Game loading | `loader.c` | ELF loaded via VFS into a fresh page directory, 16 KiB user stack, Ring 3 entry via iret |
 | Crash safety | `paging.c` | A Ring 3 page fault kills the game and returns to the launcher instead of panicking the console |
@@ -156,7 +157,9 @@ All games (and the launcher) are built on the SDK:
 - `apps/breakout.c` – brick grid sized from `gfx_info`, persistent high score
 - `apps/starcatch.c` – STARCATCH, the SDK reference game (sprites, entities,
   collision, save slots — all through `sdk/arcade.h`); ships as
-  `STARCATC.ELF` (8.3 filename limit)
+  `STARCATC.ELF` (8.3 filename limit; the launcher shows the full title)
+- `apps/blaster.c` – BLASTER, Robotron-style arena shooter: move with one
+  cluster, fire in four directions with the other (right stick on a DS4)
 
 Games persist data with `save_data("NAME.SAV", &blob, len)` /
 `load_data(...)` from `libc/console.h` — whole-file reads/writes of 8.3-named

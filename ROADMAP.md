@@ -56,25 +56,39 @@ hardware is still on the list.
    off; player 2 drives the right paddle with W/S). A USB pad still
    merges into pad 0, so DS4-vs-keyboard works out of the box.
 
+8. **Networking + REST API** (July 2026). RTL8139 NIC driver
+   (`src/rtl8139.c`, fully polled from the idle task) + a minimal
+   server-side stack (`src/net.c`): ARP replies, IPv4, ICMP echo, and a
+   single-connection TCP server carrying an HTTP REST API on port 80.
+   Endpoints: `/api/status` (uptime/tasks/memory), `/api/games`,
+   `/api/scores` (parsed .SAV files), `/api/log` (kernel log ring).
+   QEMU forwards host port 8080 → `curl localhost:8080/api/scores`
+   returns live JSON from the console. This also completes the
+   remote-logging half of the logging item.
+
+9. **Launcher polish** (July 2026). Pretty display titles (8.3 filenames
+   mapped back — STARCATC.ELF shows as STARCATCH), file sizes, game
+   count, and a persistent LAST PLAYED badge: the launcher remembers the
+   last game in its own save slot and re-selects it on boot.
+
+10. **Graphics: page flipping** (July 2026). On QEMU's std VGA the
+    Bochs display interface gives us a double-height virtual surface;
+    presents now render into the hidden page and flip via the Y-offset
+    register — tear-free, and the boot console/panic text stays visible
+    because the terminal always draws to the displayed page. Falls back
+    to the old single-buffer blit on plain VBE hardware. (Mode
+    negotiation beyond 640x480 is still future work.)
+
+11. **New game: BLASTER** (July 2026). Robotron-style arena shooter on
+    the SDK — move with arrows/left stick, fire in four directions with
+    the face buttons (right stick on a DS4), waves of homing enemies,
+    persistent high score. Sixth title on the volume.
+
 ## Up next
 
-- **Graphics/GPU.** What I have today already renders through the
-  framebuffer the graphics card exposes (VBE/LFB) — it's just unaccelerated
-  software rendering. A real vendor 2D/3D driver (Intel/AMD/Nvidia) is not
-  realistic for a hobby OS; the better use of time is double-buffered page
-  flipping and not hardcoding a single 640x480 mode.
-
-- **New game.** Something that actually exercises analog sticks and
-  multiple pads — a twin-stick shooter or a rhythm game (which gives audio
-  a reason to grow) are the strongest candidates. Build it on the SDK.
-
-- **Launcher polish.** Pretty display names (the 8.3 filename limit makes
-  STARCATCH show as STARCATC.ELF), box art, categories, recently-played —
-  worth doing now that there are 4+ games.
-
-- **Networking (stretch).** A NIC driver (rtl8139 in QEMU to start) mainly
-  to unlock the remote-logging endpoint and, longer-term, shared
-  high-score sync. Comes after the core stuff above is solid.
+- **Graphics: mode negotiation.** Page flipping is done; picking a mode
+  other than hardcoded 640x480 (and letting games adapt via gfx_info)
+  is the remaining half of the graphics item.
 
 - **PC-side game editor / dev tool (far future, just an idea).** Build an
   editor that runs on a normal PC (not on ArcadeOS itself) for putting

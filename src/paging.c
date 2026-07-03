@@ -210,7 +210,8 @@ void paging_init(void) {
      * e.g. 0xFD000000 on QEMU stdvga) with write-through caching. */
     if (fb_available()) {
         uint64_t fb_base = fb_phys_addr() & ~(uint64_t)(PAGE_SIZE_2M - 1);
-        uint64_t fb_end  = fb_phys_addr() + fb_size_bytes();
+        /* x2: the flip-capable surface is two pages tall */
+        uint64_t fb_end  = fb_phys_addr() + (uint64_t)fb_size_bytes() * 2;
         for (uint64_t addr = fb_base; addr < fb_end; addr += PAGE_SIZE_2M) {
             kernel_map_2m(addr, PTE_WRITE_THRU);
         }

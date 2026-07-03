@@ -21,4 +21,8 @@ void klog_putc(char c);
  * flight, and at least KLOG_FLUSH_MS elapsed since the last flush. */
 void klog_idle_flush(void);
 
+/* Copy the current ring contents into out (no NUL). Returns bytes
+ * copied. Used by the REST API's /api/log endpoint. */
+int klog_read(char* out, int maxlen);
+
 #endif /* KLOG_H */

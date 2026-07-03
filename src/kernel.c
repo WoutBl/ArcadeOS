@@ -32,6 +32,7 @@
 #include "disk.h"
 #include "klog.h"
 #include "audio.h"
+#include "net.h"
 #include "fs.h"
 #include "fat32.h"
 #include "pci.h"
@@ -50,6 +51,7 @@
 static void idle_task(void) {
     while (1) {
         klog_idle_flush();        /* Persist the kernel log (throttled) */
+        net_poll();               /* Pump the NIC + REST API */
         asm volatile("sti\nhlt"); /* Enable IRQs, then sleep */
     }
 }
@@ -177,6 +179,9 @@ void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
 
     /* 16. Audio: AC97 PCM out, PC speaker fallback (needs the PCI scan) */
     audio_init();
+
+    /* 16b. Networking: RTL8139 + REST API (needs the PCI scan) */
+    net_init();
 
     /* 17. Storage: AHCI (SATA) or legacy ATA → FAT32 game volume at /games */
     if (disk_init()) {

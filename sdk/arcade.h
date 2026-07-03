@@ -119,6 +119,11 @@ typedef struct {
 
     unsigned int frame;      /* Frame counter */
     unsigned int frame_ms;   /* Fixed timestep (default 16 ≈ 60 FPS) */
+
+    /* Set this to your current score each frame: the SDK reports it to
+     * the kernel when it changes, so the REST API (/api/status) shows
+     * the live score while you play. */
+    int          score;
 } arcade_t;
 
 /* Initialize graphics + input + PRNG. Returns 0 on success. */

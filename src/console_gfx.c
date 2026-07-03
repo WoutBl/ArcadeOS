@@ -170,7 +170,9 @@ void gfx_present(void) {
 void gfx_present_buffer(const uint32_t* pixels) {
     if (!fb_available() || !pixels) return;
 
-    uint8_t*  dst   = (uint8_t*)fb_ptr();
+    /* Draw into the HIDDEN page, then flip it in: tear-free. Without
+     * page flipping fb_ptr_back() is just the front buffer (old path). */
+    uint8_t*  dst   = (uint8_t*)fb_ptr_back();
     uint32_t  pitch = fb_pitch();
     uint32_t  w     = fb_width();
     uint32_t  h     = fb_height();
@@ -182,6 +184,8 @@ void gfx_present_buffer(const uint32_t* pixels) {
         for (uint32_t row = 0; row < h; row++)
             memcpy(dst + row * pitch, pixels + row * w, w * 4);
     }
+
+    fb_flip();
 }
 
 /* ──────── Direct front-buffer rendering (boot console) ──────── */
