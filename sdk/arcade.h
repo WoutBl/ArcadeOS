@@ -105,10 +105,17 @@ typedef struct {
     surface_t    screen;     /* Draw into this every frame */
     int          w, h;       /* Screen size in pixels */
 
-    pad_state_t  pad;        /* Raw pad 0 state this frame */
+    pad_state_t  pad;        /* Raw pad 0 state this frame (player 1) */
     uint16_t     pressed;    /* Buttons that went down THIS frame */
     uint16_t     released;   /* Buttons that went up THIS frame */
     uint16_t     held;       /* Buttons currently down */
+
+    /* Player 2 (pad 1). On the keyboard: WASD = D-pad/stick, R/T/F/G =
+     * A/B/X/Y. Same edge fields as player 1. */
+    pad_state_t  pad2;
+    uint16_t     pressed2;
+    uint16_t     released2;
+    uint16_t     held2;
 
     unsigned int frame;      /* Frame counter */
     unsigned int frame_ms;   /* Fixed timestep (default 16 ≈ 60 FPS) */

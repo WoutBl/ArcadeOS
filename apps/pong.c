@@ -4,8 +4,9 @@
  * The reference title proving the full console loop:
  * FAT32 load → ELF exec → Ring 3 → pad input syscall → gfx present syscall.
  *
- * Controls (pad 0): D-pad up/down or left stick = move paddle
- *                   START = pause, SELECT or B = quit to launcher
+ * Controls: P1 (pad 0) = arrows/left stick, P2 (pad 1) = W/S keys.
+ *           Y (V key) toggles 1P (AI opponent) / 2P mode.
+ *           START = pause, SELECT or B = quit to launcher
  */
 
 #include "../sdk/arcade.h"
@@ -36,6 +37,7 @@ int main(void) {
     int right_y = H / 2 - paddle_h / 2;
     int score_l = 0, score_r = 0;
     int paused = 0;
+    int two_player = 0;      /* Y toggles: 0 = AI opponent, 1 = pad 1 */
 
     entity_t ball = { 0 };
     ball.active = 1;
@@ -50,6 +52,10 @@ int main(void) {
             exit(0);   /* Back to the launcher */
         if (a.pressed & PAD_BTN_START)
             paused = !paused;
+        if (a.pressed & PAD_BTN_Y) {
+            two_player = !two_player;
+            sfx_select();
+        }
 
         if (!paused) {
             /* Player paddle: D-pad or analog stick */
@@ -60,11 +66,19 @@ int main(void) {
             if (left_y < 0) left_y = 0;
             if (left_y > H - paddle_h) left_y = H - paddle_h;
 
-            /* AI paddle: track the ball with a speed cap */
-            int ball_cy = FX_INT(ball.y) + ball_size / 2;
-            int ai_cy   = right_y + paddle_h / 2;
-            if (ai_cy < ball_cy - 8) right_y += paddle_speed - 2;
-            if (ai_cy > ball_cy + 8) right_y -= paddle_speed - 2;
+            if (two_player) {
+                /* Player 2 paddle: pad 1 (W/S on the keyboard) */
+                if (a.held2 & PAD_BTN_UP)    right_y -= paddle_speed;
+                if (a.held2 & PAD_BTN_DOWN)  right_y += paddle_speed;
+                if (a.pad2.ly < -8000) right_y -= paddle_speed;
+                if (a.pad2.ly >  8000) right_y += paddle_speed;
+            } else {
+                /* AI paddle: track the ball with a speed cap */
+                int ball_cy = FX_INT(ball.y) + ball_size / 2;
+                int ai_cy   = right_y + paddle_h / 2;
+                if (ai_cy < ball_cy - 8) right_y += paddle_speed - 2;
+                if (ai_cy > ball_cy + 8) right_y -= paddle_speed - 2;
+            }
             if (right_y < 0) right_y = 0;
             if (right_y > H - paddle_h) right_y = H - paddle_h;
 
@@ -125,7 +139,11 @@ int main(void) {
             surf_draw_text(&a.screen, W / 2 - 96, H / 2 - 16, "PAUSED",
                            rgb(255, 220, 80), SURF_TRANSPARENT, 4);
 
-        surf_draw_text(&a.screen, 16, H - 16, "SELECT/B: QUIT  START: PAUSE",
+        surf_draw_text(&a.screen, W / 2 - 32, 76, two_player ? "2P MODE" : "VS CPU",
+                       two_player ? rgb(120, 255, 160) : rgb(90, 100, 150),
+                       SURF_TRANSPARENT, 1);
+        surf_draw_text(&a.screen, 16, H - 16,
+                       "SELECT/B: QUIT  START: PAUSE  Y: 1P/2P  P2: W/S",
                        rgb(80, 90, 140), SURF_TRANSPARENT, 1);
     }
 

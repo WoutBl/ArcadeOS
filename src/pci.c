@@ -12,17 +12,6 @@
 static pci_device_t pci_devices[PCI_MAX_DEVICES];
 static int          pci_num_devices = 0;
 
-/* 32-bit port I/O helpers (types.h only provides 8/16-bit) */
-static inline uint32_t inl(uint16_t port) {
-    uint32_t ret;
-    asm volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
-static inline void outl(uint16_t port, uint32_t val) {
-    asm volatile("outl %0, %1" : : "a"(val), "Nd"(port));
-}
-
 uint32_t pci_read_config(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset) {
     uint32_t address = 0x80000000u
                      | ((uint32_t)bus  << 16)

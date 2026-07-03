@@ -46,11 +46,16 @@ int arcade_init(arcade_t* a) {
     a->pressed  = 0;
     a->released = 0;
     a->held     = 0;
+    a->pressed2  = 0;
+    a->released2 = 0;
+    a->held2     = 0;
     a->frame    = 0;
     a->frame_ms = 16;                 /* ~60 FPS */
 
     pad_read(0, &a->pad);
     a->held = a->pad.buttons;
+    pad_read(1, &a->pad2);
+    a->held2 = a->pad2.buttons;
 
     arcade_srand(ticks() | 1);
     return 0;
@@ -67,6 +72,12 @@ int arcade_frame(arcade_t* a) {
     a->held     = a->pad.buttons;
     a->pressed  = (uint16_t)(a->pad.buttons & ~prev);
     a->released = (uint16_t)(prev & ~a->pad.buttons);
+
+    uint16_t prev2 = a->pad2.buttons;
+    pad_read(1, &a->pad2);
+    a->held2     = a->pad2.buttons;
+    a->pressed2  = (uint16_t)(a->pad2.buttons & ~prev2);
+    a->released2 = (uint16_t)(prev2 & ~a->pad2.buttons);
 
     return 1;
 }

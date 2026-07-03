@@ -96,12 +96,14 @@ $(BUILD)/isr.o: isr.asm | $(BUILD)
 $(BUILD)/switch.o: switch.asm | $(BUILD)
 	$(AS) $(ASFLAGS) switch.asm -o $(BUILD)/switch.o
 
-# Compile Kernel C source files
-$(BUILD)/%.o: src/%.c | $(BUILD)
+# Compile Kernel C source files (all headers as deps: no per-file
+# tracking, so a header edit must rebuild everything that could use it)
+KERNEL_HEADERS = $(wildcard include/*.h)
+$(BUILD)/%.o: src/%.c $(KERNEL_HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $< -o $@
 
 # Compile Libc C source files
-$(BUILD)/libc_%.o: libc/%.c | $(BUILD)
+$(BUILD)/libc_%.o: libc/%.c $(wildcard libc/*.h) include/console_abi.h | $(BUILD)
 	$(CC) -c -ffreestanding -O2 -Wall -Wextra $(NOFPU) $< -o $@
 
 # Compile the SDK
@@ -113,7 +115,7 @@ $(BUILD)/libarcade.a: $(SDK_OBJECTS) $(LIBC_OBJECTS)
 	$(AR) rcs $@ $(SDK_OBJECTS) $(LIBC_OBJECTS)
 
 # Compile Ring 3 User Apps
-$(BUILD)/%.elf: apps/%.c $(BUILD)/libarcade.a | $(BUILD)
+$(BUILD)/%.elf: apps/%.c $(BUILD)/libarcade.a sdk/arcade.h $(wildcard libc/*.h) | $(BUILD)
 	$(CC) -Os -s -ffreestanding -nostdlib -fno-builtin $(NOFPU) $< $(BUILD)/libarcade.a -o $@ $(APP_LDFLAGS)
 
 # Create the bootable FAT32 game volume: bootloader + kernel in the

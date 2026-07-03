@@ -39,7 +39,7 @@ TSS-based Ring 3 support, int 0x80 syscalls, VFS + devfs, and ATA PIO.
 | Framebuffer | `fb.c`, `boot.asm` | 640x480x32 LFB set up by the bootloader via VBE; mapped into the identity map by `paging.c` |
 | Graphics API | `console_gfx.c/h` | Double-buffered software renderer: clear, rects, lines, sprites (alpha-keyed), 8x8 font text; `gfx_present_buffer()` backs the user-space present syscall |
 | Boot console | `vga.c` | The classic terminal API now renders glyphs onto the framebuffer (VGA text fallback kept); all output mirrored to COM1 (`serial.c`) |
-| Controllers | `gamepad.c` | Merges sources into 4 logical pads; pad 0 is keyboard-mapped; press-edge latching so slow frame loops never miss a tap |
+| Controllers | `gamepad.c` | Merges sources into 4 logical pads; the keyboard is split into TWO virtual pads for local 2-player (pad 0 = arrows/XZCV, pad 1 = WASD + R/T/F/G); USB pads merge into pad 0; press-edge latching so slow frame loops never miss a tap |
 | USB host | `pci.c`, `usb.c`, `uhci.c`, `xhci.c` | Full UHCI transfer engine: frame list + QH/TD schedule, synchronous control transfers (enumeration: GET_DESCRIPTOR / SET_ADDRESS / SET_CONFIGURATION), polled interrupt IN pipes for HID reports; DualShock 4 reports decoded in `usb.c` and merged into pad 0; xHCI remains an architectural stub |
 | Storage | `ahci.c`, `ata.c`, `disk.c`, `fat32.c` | AHCI (SATA) driver preferred — what real hardware exposes — with legacy ATA PIO as fallback, dispatched through `disk.c`; FAT32 (8.3 names) mounted at `/games`; write path (cluster alloc, FAT mirroring, directory updates) backs the save-data API |
 | Save data | `fat32.c`, `syscall.c` | "Memory card" semantics: whole-file `SYS_SAVE`/`SYS_LOAD` on the game volume; games persist high scores across power cycles |
@@ -112,18 +112,21 @@ context switches don't save FPU state.
 Note: rebuilding regenerates `arcadeos.img`, which wipes save files along with
 it. Keep a copy of the image if you care about your high scores.
 
-## Controls (pad 0, keyboard-mapped)
+## Controls (keyboard = two virtual pads)
 
-| Input | Key |
-|---|---|
-| D-pad | Arrow keys |
-| Left stick | WASD |
-| A / B / X / Y | X / Z / C / V |
-| START / SELECT | Enter / Tab |
-| L1 / R1 | Q / E |
+The keyboard is split into two logical pads for local 2-player; a USB
+controller (DualShock 4) always merges into pad 0 (player 1).
+
+| Input | Player 1 (pad 0) | Player 2 (pad 1) |
+|---|---|---|
+| D-pad | Arrow keys | W / A / S / D |
+| A / B / X / Y | X / Z / C / V | R / T / F / G |
+| START / SELECT | Enter / Tab | — |
+| L1 / R1 | Q / E | — |
 
 Launcher: up/down select, A or START to play. Pong: SELECT or B quits back
-to the launcher, START pauses.
+to the launcher, START pauses, and **Y (V key) toggles 1P-vs-CPU / 2P mode**
+(player 2 moves the right paddle with W/S).
 
 ## Real controller (DualShock 4 over micro-USB)
 

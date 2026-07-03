@@ -10,10 +10,11 @@
 
 /*
  * Logical pad states, updated by the input sources.
- * pads[]     – keyboard-mapped state (only index 0 is ever written)
- * usb_pads[] – USB HID gamepad state (DualShock 4 etc.)
- * gamepad_get_state() merges the two: any physical controller and the
- * keyboard both drive pad 0, so player 1 works either way.
+ * pads[]     – keyboard-mapped state: the keyboard is SPLIT into two
+ *              virtual pads for local 2-player. Pad 0 = arrows + X/Z/C/V
+ *              + Enter/Tab + Q/E; pad 1 = WASD (D-pad + stick) + R/T/F/G.
+ * usb_pads[] – USB HID gamepad state (DualShock 4 etc.), merged into
+ *              pad 0, so a physical controller is always player 1.
  */
 static pad_state_t pads[PAD_MAX_CONTROLLERS];
 static pad_state_t usb_pads[PAD_MAX_CONTROLLERS];
@@ -54,17 +55,34 @@ static uint16_t map_plain_scancode(uint8_t sc) {
     return 0;
 }
 
-/* WASD drives the left analog stick digitally (full deflection) */
+/* Pad 1 button map: R/T/F/G around WASD */
+static uint16_t map_pad1_scancode(uint8_t sc) {
+    switch (sc) {
+        case 0x13: return PAD_BTN_A;       /* R key */
+        case 0x14: return PAD_BTN_B;       /* T key */
+        case 0x21: return PAD_BTN_X;       /* F key */
+        case 0x22: return PAD_BTN_Y;       /* G key */
+    }
+    return 0;
+}
+
+/* WASD = pad 1 D-pad, and drives its left stick digitally too so
+ * stick-reading games work for player 2 */
 static uint16_t wasd_held = 0;   /* Bits: 1=W 2=A 4=S 8=D */
 
-static void update_left_stick(void) {
+static void update_pad1_dirs(void) {
     int16_t lx = 0, ly = 0;
-    if (wasd_held & 0x2) lx = -32767;   /* A */
-    if (wasd_held & 0x8) lx =  32767;   /* D */
-    if (wasd_held & 0x1) ly = -32767;   /* W (up = negative) */
-    if (wasd_held & 0x4) ly =  32767;   /* S */
-    pads[0].lx = lx;
-    pads[0].ly = ly;
+    uint16_t dpad = 0;
+    if (wasd_held & 0x2) { lx = -32767; dpad |= PAD_BTN_LEFT;  }   /* A */
+    if (wasd_held & 0x8) { lx =  32767; dpad |= PAD_BTN_RIGHT; }   /* D */
+    if (wasd_held & 0x1) { ly = -32767; dpad |= PAD_BTN_UP;    }   /* W */
+    if (wasd_held & 0x4) { ly =  32767; dpad |= PAD_BTN_DOWN;  }   /* S */
+    pads[1].lx = lx;
+    pads[1].ly = ly;
+    uint16_t newly = (uint16_t)(dpad & ~(pads[1].buttons));
+    pads[1].buttons = (uint16_t)((pads[1].buttons &
+        ~(PAD_BTN_UP | PAD_BTN_DOWN | PAD_BTN_LEFT | PAD_BTN_RIGHT)) | dpad);
+    pad_latch[1] |= newly;
 }
 
 static void gamepad_kb_hook(uint8_t scancode) {
@@ -89,7 +107,7 @@ static void gamepad_kb_hook(uint8_t scancode) {
             default: return;
         }
     } else {
-        /* WASD → left analog stick */
+        /* WASD → pad 1 D-pad + stick */
         uint16_t wasd_bit = 0;
         switch (code) {
             case 0x11: wasd_bit = 0x1; break;   /* W */
@@ -100,7 +118,20 @@ static void gamepad_kb_hook(uint8_t scancode) {
         if (wasd_bit) {
             if (released) wasd_held &= (uint16_t)~wasd_bit;
             else          wasd_held |= wasd_bit;
-            update_left_stick();
+            update_pad1_dirs();
+            return;
+        }
+
+        /* R/T/F/G → pad 1 face buttons */
+        uint16_t bit1 = map_pad1_scancode(code);
+        if (bit1) {
+            if (released) {
+                pads[1].buttons &= (uint16_t)~bit1;
+            } else {
+                pads[1].buttons |= bit1;
+                pad_latch[1]    |= bit1;
+            }
+            return;
         }
 
         bit = map_plain_scancode(code);
@@ -121,16 +152,18 @@ void gamepad_init(void) {
     memset(pads, 0, sizeof(pads));
     memset(usb_pads, 0, sizeof(usb_pads));
 
-    /* Pad 0 is the keyboard-mapped developer pad – always connected */
+    /* The keyboard provides TWO virtual pads for local 2-player */
     pads[0].connected = 1;
     pads[0].source    = PAD_SOURCE_KEYBOARD;
+    pads[1].connected = 1;
+    pads[1].source    = PAD_SOURCE_KEYBOARD;
 
     keyboard_set_raw_hook(gamepad_kb_hook);
 
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    terminal_writestring("[PAD] Controller stack ready (pad 0: keyboard-mapped)\n");
+    terminal_writestring("[PAD] Controller stack ready (keyboard: pads 0+1)\n");
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
-    terminal_writestring("[PAD] Map: arrows=D-pad X/Z=A/B C/V=X/Y Enter=START Tab=SELECT\n");
+    terminal_writestring("[PAD] P1: arrows X/Z/C/V Enter/Tab  P2: WASD R/T/F/G\n");
 }
 
 void gamepad_get_state(int index, pad_state_t* out) {
