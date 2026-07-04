@@ -64,7 +64,10 @@ hardware is still on the list.
    `/api/scores` (parsed .SAV files), `/api/log` (kernel log ring).
    QEMU forwards host port 8080 → `curl localhost:8080/api/scores`
    returns live JSON from the console. This also completes the
-   remote-logging half of the logging item.
+   remote-logging half of the logging item. `/api/status` additionally
+   reports the running game's LIVE score (SYS_SCORE, auto-reported by
+   the SDK via `a.score`), and every HTTP request is logged to
+   serial + the kernel log ring.
 
 9. **Launcher polish** (July 2026). Pretty display titles (8.3 filenames
    mapped back — STARCATC.ELF shows as STARCATCH), file sizes, game

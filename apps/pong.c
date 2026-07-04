@@ -12,6 +12,10 @@
 #include "../sdk/arcade.h"
 #include "../libc/syscall.h"
 
+/* Persistent high score: most points player 1 racked up in a session */
+#define SAVE_MAGIC 0xA2CADE03u
+typedef struct { unsigned int magic; int high; } save_t;
+
 static void draw_score(surface_t* s, int x, int score, uint32_t color) {
     char buf[4];
     if (score > 99) score = 99;
@@ -39,6 +43,12 @@ int main(void) {
     int paused = 0;
     int two_player = 0;      /* Y toggles: 0 = AI opponent, 1 = pad 1 */
 
+    save_t sv;
+    int high = 0, high_dirty = 0;
+    if (arcade_load("PONG", 0, &sv, sizeof(sv)) == (int)sizeof(sv) &&
+        sv.magic == SAVE_MAGIC)
+        high = sv.high;
+
     entity_t ball = { 0 };
     ball.active = 1;
     ball.w = ball.h = ball_size;
@@ -48,8 +58,15 @@ int main(void) {
     ball.vy = (fx_t)(arcade_rand() % 512) - 256 + FX(2);
 
     while (arcade_frame(&a)) {
-        if (a.pressed & (PAD_BTN_SELECT | PAD_BTN_B))
+        a.score = score_l;
+        if (a.pressed & (PAD_BTN_SELECT | PAD_BTN_B)) {
+            if (high_dirty) {
+                sv.magic = SAVE_MAGIC;
+                sv.high  = high;
+                arcade_save("PONG", 0, &sv, sizeof(sv));
+            }
             exit(0);   /* Back to the launcher */
+        }
         if (a.pressed & PAD_BTN_START)
             paused = !paused;
         if (a.pressed & PAD_BTN_Y) {
@@ -118,7 +135,7 @@ int main(void) {
 
             /* Scoring */
             if (bx < -ball_size)  { score_r++; sound(180, 250); ball.x = FX(W/2); ball.y = FX(H/2); ball.vx =  FX(4); ball.vy = (fx_t)(arcade_rand() % 512) - 256; }
-            if (bx > W)           { score_l++; sound(700, 150); ball.x = FX(W/2); ball.y = FX(H/2); ball.vx = -FX(4); ball.vy = (fx_t)(arcade_rand() % 512) - 256; }
+            if (bx > W)           { score_l++; if (score_l > high) { high = score_l; high_dirty = 1; } sound(700, 150); ball.x = FX(W/2); ball.y = FX(H/2); ball.vx = -FX(4); ball.vy = (fx_t)(arcade_rand() % 512) - 256; }
         }
 
         /* ──────── Render ──────── */
@@ -139,6 +156,16 @@ int main(void) {
             surf_draw_text(&a.screen, W / 2 - 96, H / 2 - 16, "PAUSED",
                            rgb(255, 220, 80), SURF_TRANSPARENT, 4);
 
+        {
+            char hb[12] = "HI ";
+            int v = high, n = 3;
+            if (v <= 0) hb[n++] = '0';
+            char tmp[8]; int t = 0;
+            while (v > 0 && t < 7) { tmp[t++] = (char)('0' + v % 10); v /= 10; }
+            while (t > 0) hb[n++] = tmp[--t];
+            hb[n] = '\0';
+            surf_draw_text(&a.screen, 16, 16, hb, rgb(255, 220, 80), SURF_TRANSPARENT, 1);
+        }
         surf_draw_text(&a.screen, W / 2 - 32, 76, two_player ? "2P MODE" : "VS CPU",
                        two_player ? rgb(120, 255, 160) : rgb(90, 100, 150),
                        SURF_TRANSPARENT, 1);

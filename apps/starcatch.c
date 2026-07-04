@@ -113,6 +113,7 @@ int main(void) {
     unsigned int next_spawn = 0;
 
     while (arcade_frame(&a)) {
+        a.score = score;
         if (a.pressed & PAD_BTN_SELECT) {
             if (high_dirty) {
                 sv.magic = SAVE_MAGIC;

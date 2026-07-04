@@ -8,6 +8,7 @@ libc and provides what every game needs so you don't hand-roll it again:
 | Fixed-timestep game loop (~60 FPS) | `arcade_init()`, `arcade_frame()` |
 | Input with edge detection | `a.pressed`, `a.released`, `a.held`, `a.pad` (analog sticks) |
 | Player 2 input (pad 1) | `a.pressed2`, `a.released2`, `a.held2`, `a.pad2` |
+| Live score for the REST API | set `a.score` each frame |
 | Fixed-point math (24.8) | `fx_t`, `FX()`, `FX_INT()`, `FX_MUL()` |
 | Sprites (color-keyed, scaled) | `sprite_t`, `arcade_draw_sprite()` |
 | Entities (position/velocity/collision box) | `entity_t`, `arcade_entity_move/bounce/overlap/draw()` |

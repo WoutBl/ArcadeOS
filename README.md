@@ -44,7 +44,7 @@ TSS-based Ring 3 support, int 0x80 syscalls, VFS + devfs, and ATA PIO.
 | Storage | `ahci.c`, `ata.c`, `disk.c`, `fat32.c` | AHCI (SATA) driver preferred — what real hardware exposes — with legacy ATA PIO as fallback, dispatched through `disk.c`; FAT32 (8.3 names) mounted at `/games`; write path (cluster alloc, FAT mirroring, directory updates) backs the save-data API |
 | Save data | `fat32.c`, `syscall.c` | "Memory card" semantics: whole-file `SYS_SAVE`/`SYS_LOAD` on the game volume; games persist high scores across power cycles |
 | Kernel log | `klog.c`, `serial.c` | Everything mirrored to COM1 also lands in a 32 KiB ring buffer, flushed to `KERNEL.LOG` on the game volume by the idle task (~2 s cadence) — boot logs survive on disk even without a serial cable |
-| Networking | `rtl8139.c`, `net.c` | RTL8139 NIC (polled from the idle task) + minimal server stack: ARP, IPv4, ICMP echo, single-connection TCP, and an **HTTP REST API** on port 80 — `/api/status`, `/api/games`, `/api/scores`, `/api/log`. With QEMU: `curl http://localhost:8080/api/status` |
+| Networking | `rtl8139.c`, `net.c` | RTL8139 NIC (polled from the idle task) + minimal server stack: ARP, IPv4, ICMP echo, single-connection TCP, and an **HTTP REST API** on port 80 — `/api/status` (incl. the live score of the running game), `/api/games`, `/api/scores`, `/api/log` (which also records every HTTP request). With QEMU: `curl http://localhost:8080/api/status` |
 | Audio | `audio.c`, `ac97.c`, `pcspk.c` | `SYS_SOUND` square-wave tones (freq + duration): synthesized 48 kHz stereo PCM through the AC97 codec's DMA engine when present, PC speaker (PIT channel 2) fallback otherwise; launcher and all games have sound effects |
 | Game loading | `loader.c` | ELF loaded via VFS into a fresh page directory, 16 KiB user stack, Ring 3 entry via iret |
 | Crash safety | `paging.c` | A Ring 3 page fault kills the game and returns to the launcher instead of panicking the console |
@@ -62,6 +62,7 @@ TSS-based Ring 3 support, int 0x80 syscalls, VFS + devfs, and ATA PIO.
 | 27 | `SYS_SAVE` | Whole-file save to the game volume (max 64 KiB) |
 | 28 | `SYS_LOAD` | Whole-file load; returns bytes read |
 | 29 | `SYS_SOUND` | Play a square-wave tone (EBX = Hz, ECX = ms; 0 Hz stops) |
+| 30 | `SYS_SCORE` | Report the live score (served by `/api/status` while playing) |
 
 User-space API: `libc/console.h` (syscall wrappers + software drawing helpers).
 Shared ABI structs: `include/console_abi.h`.

@@ -25,6 +25,7 @@
 #include "console_abi.h"
 #include "fat32.h"
 #include "audio.h"
+#include "net.h"
 
 /* ──────── The global TSS ──────── */
 tss_t kernel_tss;

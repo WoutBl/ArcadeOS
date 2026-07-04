@@ -3,8 +3,10 @@
  *
  * Robotron-style: one button cluster moves, the other shoots.
  *   Move:  D-pad / left stick (pad 0)
- *   Shoot: A/B/X/Y fire right/down(Z)/left(C)/up(V)... mapped by
- *          cluster position: X key = right, Z = left, C = down, V = up
+ *   Shoot: face buttons fire in their DIAMOND direction —
+ *          triangle/Y (V key) = up, cross/A (X key) = down,
+ *          square/X (C key) = left, circle/B (Z key) = right.
+ *          A DS4 right stick fires too (true twin-stick).
  *   SELECT quits, START pauses/restarts.
  *
  * Enemies spawn at the arena edges and home in. Each wave is faster.
@@ -74,6 +76,7 @@ int main(void) {
     player.y = FX(a.h / 2);
 
     while (arcade_frame(&a)) {
+        a.score = score;
         if (a.pressed & PAD_BTN_SELECT) {
             if (high_dirty) { sv.magic = SAVE_MAGIC; sv.high = high; arcade_save("BLASTER", 0, &sv, sizeof(sv)); }
             exit(0);
@@ -104,10 +107,12 @@ int main(void) {
             /* Shoot: face buttons = directions (or right stick on a DS4) */
             if (fire_cooldown > 0) fire_cooldown--;
             fx_t dx = 0, dy = 0;
-            if (a.held & PAD_BTN_A) dx =  FX(9);            /* X key: right */
-            if (a.held & PAD_BTN_B) dx = -FX(9);            /* Z key: left */
-            if (a.held & PAD_BTN_X) dy =  FX(9);            /* C key: down */
-            if (a.held & PAD_BTN_Y) dy = -FX(9);            /* V key: up */
+            /* Diamond layout: each face button fires toward its
+             * physical position on the pad */
+            if (a.held & PAD_BTN_B) dx =  FX(9);            /* Circle (Z key): right */
+            if (a.held & PAD_BTN_X) dx = -FX(9);            /* Square (C key): left */
+            if (a.held & PAD_BTN_A) dy =  FX(9);            /* Cross  (X key): down */
+            if (a.held & PAD_BTN_Y) dy = -FX(9);            /* Triangle (V key): up */
             if (a.pad.rx >  8000) dx =  FX(9);
             if (a.pad.rx < -8000) dx = -FX(9);
             if (a.pad.ry >  8000) dy =  FX(9);
@@ -232,7 +237,7 @@ int main(void) {
                            rgb(255,220,80), SURF_TRANSPARENT, 4);
         }
 
-        surf_draw_text(&a.screen, 8, a.h - 14, "MOVE: ARROWS  FIRE: X/Z/C/V  SELECT: QUIT",
+        surf_draw_text(&a.screen, 8, a.h - 14, "MOVE: ARROWS  FIRE: V=UP X=DOWN C=LEFT Z=RIGHT  SELECT: QUIT",
                        rgb(90, 100, 140), SURF_TRANSPARENT, 1);
     }
 

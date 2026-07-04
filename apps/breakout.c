@@ -119,6 +119,7 @@ int main(void) {
     init_bricks();
 
     while (arcade_frame(&a)) {
+        a.score = score;
         /* System Controls */
         if (a.pressed & (PAD_BTN_SELECT | PAD_BTN_B)) {
             if (score > high) save_high(score);
