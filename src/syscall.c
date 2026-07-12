@@ -26,6 +26,35 @@
 #include "fat32.h"
 #include "audio.h"
 #include "net.h"
+#include "paging.h"
+
+/*
+ * ──────── User pointer validation ────────
+ *
+ * Every pointer a game hands to a syscall is untrusted. These wrappers
+ * walk the calling process's page tables (paging_user_access_ok) and
+ * reject anything not mapped PRESENT|USER — including kernel identity-
+ * map addresses, which live inside the user PML4 but are supervisor-
+ * only. A syscall that gets a bad pointer returns -1 instead of
+ * reading/writing kernel memory on the game's behalf.
+ */
+#define USER_STR_MAX  256      /* Paths, filenames */
+#define USER_TEXT_MAX 4096     /* Free-text buffers (write/writefile) */
+
+/* Pointer the kernel will READ len bytes through */
+static int urd(const void* p, uint64_t len) {
+    return p && paging_user_access_ok((uint64_t)(uintptr_t)p, len, 0);
+}
+
+/* Pointer the kernel will WRITE len bytes through */
+static int uwr(const void* p, uint64_t len) {
+    return p && paging_user_access_ok((uint64_t)(uintptr_t)p, len, 1);
+}
+
+/* NUL-terminated user string (path/filename length cap) */
+static int ustr(const char* s) {
+    return s && paging_user_str_ok(s, USER_STR_MAX) >= 0;
+}
 
 /* ──────── The global TSS ──────── */
 tss_t kernel_tss;
@@ -92,7 +121,14 @@ static void syscall_handler(registers_t* regs) {
             uint32_t     len = (uint32_t)regs->edx;
 
             if (!str) { regs->eax = (uint32_t)-1; break; }
-            if (len == 0) len = (uint32_t)strlen(str); /* backward compat */
+            if (len == 0) {
+                /* Legacy "use strlen" — validate while measuring */
+                long l = paging_user_str_ok(str, USER_TEXT_MAX);
+                if (l < 0) { regs->eax = (uint32_t)-1; break; }
+                len = (uint32_t)l;
+            } else if (!urd(str, len)) {
+                regs->eax = (uint32_t)-1; break;
+            }
 
             /* Route through VFS if the task has a node for this fd */
             if (current_task && fd >= 0 && fd < MAX_FD && current_task->fds[fd]) {
@@ -119,7 +155,7 @@ static void syscall_handler(registers_t* regs) {
             char*  buf   = (char*)regs->ecx;
             size_t count = (size_t)regs->edx;
 
-            if (!buf || count == 0) { regs->eax = (uint32_t)-1; break; }
+            if (!uwr(buf, count) || count == 0) { regs->eax = (uint32_t)-1; break; }
 
             /* Route through VFS if the task has a node for this fd */
             if (current_task && fd >= 0 && fd < MAX_FD && current_task->fds[fd]) {
@@ -144,9 +180,20 @@ static void syscall_handler(registers_t* regs) {
         case SYS_SPAWN: {
             const char* path = (const char*)regs->ebx;
             char* const* argv = (char* const*)regs->ecx;
-            if (!path) {
+            if (!ustr(path)) {
                 regs->eax = (uint32_t)-1;
                 break;
+            }
+            /* argv is a user array of user string pointers — validate
+             * every element before launch_user_app copies them. */
+            if (argv) {
+                int bad_argv = 0;
+                for (int n = 0; ; n++) {
+                    if (n >= 32 || !urd(&argv[n], sizeof(char*))) { bad_argv = 1; break; }
+                    if (!argv[n]) break;
+                    if (!ustr(argv[n])) { bad_argv = 1; break; }
+                }
+                if (bad_argv) { regs->eax = (uint32_t)-1; break; }
             }
 
             /*
@@ -194,11 +241,11 @@ static void syscall_handler(registers_t* regs) {
         case SYS_LISTDIR: {
             char* buf = (char*)regs->ebx;
             int max_len = regs->ecx;
-            if (!buf || max_len <= 0) {
+            if (max_len <= 0 || !uwr(buf, (uint64_t)max_len)) {
                 regs->eax = (uint32_t)-1;
                 break;
             }
-            
+
             buf[0] = '\0';
             int written = 0;
             size_t current_len = strlen(current_dir);
@@ -240,7 +287,7 @@ static void syscall_handler(registers_t* regs) {
             const char* path = (const char*)regs->ebx;
             char* buf = (char*)regs->ecx;
             int max_len = regs->edx;
-            if (!path || !buf || max_len <= 0) {
+            if (!ustr(path) || max_len <= 0 || !uwr(buf, (uint64_t)max_len)) {
                 regs->eax = (uint32_t)-1;
                 break;
             }
@@ -259,28 +306,28 @@ static void syscall_handler(registers_t* regs) {
 
         case SYS_TOUCH: {
             const char* path = (const char*)regs->ebx;
-            if (!path) { regs->eax = (uint32_t)-1; break; }
+            if (!ustr(path)) { regs->eax = (uint32_t)-1; break; }
             regs->eax = fs_create_file(path, "");
             break;
         }
 
         case SYS_RM: {
             const char* path = (const char*)regs->ebx;
-            if (!path) { regs->eax = (uint32_t)-1; break; }
+            if (!ustr(path)) { regs->eax = (uint32_t)-1; break; }
             regs->eax = fs_delete_file(path);
             break;
         }
 
         case SYS_MKDIR: {
             const char* path = (const char*)regs->ebx;
-            if (!path) { regs->eax = (uint32_t)-1; break; }
+            if (!ustr(path)) { regs->eax = (uint32_t)-1; break; }
             regs->eax = fs_create_directory(path);
             break;
         }
 
         case SYS_CD: {
             const char* path = (const char*)regs->ebx;
-            if (!path) { regs->eax = (uint32_t)-1; break; }
+            if (!ustr(path)) { regs->eax = (uint32_t)-1; break; }
             regs->eax = fs_change_directory(path);
             break;
         }
@@ -288,7 +335,7 @@ static void syscall_handler(registers_t* regs) {
         case SYS_PWD: {
             char* buf = (char*)regs->ebx;
             int max_len = regs->ecx;
-            if (!buf || max_len <= 0) { regs->eax = (uint32_t)-1; break; }
+            if (max_len <= 0 || !uwr(buf, (uint64_t)max_len)) { regs->eax = (uint32_t)-1; break; }
             int i = 0;
             while (current_dir[i] && i < max_len - 1) { buf[i] = current_dir[i]; i++; }
             buf[i] = '\0';
@@ -299,7 +346,10 @@ static void syscall_handler(registers_t* regs) {
         case SYS_WRITEFILE: {
             const char* path = (const char*)regs->ebx;
             const char* content = (const char*)regs->ecx;
-            if (!path || !content) { regs->eax = (uint32_t)-1; break; }
+            if (!ustr(path) ||
+                !content || paging_user_str_ok(content, USER_TEXT_MAX) < 0) {
+                regs->eax = (uint32_t)-1; break;
+            }
             regs->eax = fs_create_file(path, content);
             break;
         }
@@ -307,7 +357,7 @@ static void syscall_handler(registers_t* regs) {
         case SYS_DATE: {
             char* buf = (char*)regs->ebx;
             int max_len = regs->ecx;
-            if (!buf || max_len < 20) { regs->eax = (uint32_t)-1; break; }
+            if (max_len < 20 || !uwr(buf, (uint64_t)max_len)) { regs->eax = (uint32_t)-1; break; }
             uint32_t yy = current_year;
             uint32_t mo = current_month;
             uint32_t dd = current_day;
@@ -356,7 +406,7 @@ static void syscall_handler(registers_t* regs) {
             const char* path  = (const char*)regs->ebx;
             uint32_t    flags = (uint32_t)regs->ecx;
 
-            if (!path || !current_task) { regs->eax = (uint32_t)-1; break; }
+            if (!ustr(path) || !current_task) { regs->eax = (uint32_t)-1; break; }
 
             vfs_node_t* node = vfs_open(path, flags);
             if (!node) { regs->eax = (uint32_t)-1; break; }
@@ -395,7 +445,7 @@ static void syscall_handler(registers_t* regs) {
              * process:  pipefd[0] = read end,  pipefd[1] = write end.
              */
             int* pipefd = (int*)regs->ebx;
-            if (!pipefd || !current_task) { regs->eax = (uint32_t)-1; break; }
+            if (!uwr(pipefd, 2 * sizeof(int)) || !current_task) { regs->eax = (uint32_t)-1; break; }
 
             pipe_buf_t* pb = pipe_create();
             if (!pb) { regs->eax = (uint32_t)-1; break; }
@@ -467,7 +517,7 @@ static void syscall_handler(registers_t* regs) {
             /* EBX = gfx_info_t* – report the framebuffer geometry so the
              * game can allocate a matching pixel buffer. */
             gfx_info_t* info = (gfx_info_t*)regs->ebx;
-            if (!info || !fb_available()) { regs->eax = (uint32_t)-1; break; }
+            if (!uwr(info, sizeof(gfx_info_t)) || !fb_available()) { regs->eax = (uint32_t)-1; break; }
 
             info->width  = fb_width();
             info->height = fb_height();
@@ -483,12 +533,12 @@ static void syscall_handler(registers_t* regs) {
              * in user space. The kernel blits it to the framebuffer in one
              * call – the user-space half of double buffering.
              */
-            uint32_t ptr = regs->ebx;
+            uint64_t ptr = regs->ebx;
             if (!fb_available()) { regs->eax = (uint32_t)-1; break; }
 
             uint32_t bytes = fb_width() * fb_height() * 4;
-            /* The buffer must live entirely inside user address space */
-            if (ptr < 0x400000 || ptr + bytes > 0xC0000000) {
+            /* Whole buffer must be mapped user-readable */
+            if (!paging_user_access_ok(ptr, bytes, 0)) {
                 regs->eax = (uint32_t)-1;
                 break;
             }
@@ -501,7 +551,7 @@ static void syscall_handler(registers_t* regs) {
             /* EBX = pad index, ECX = pad_state_t* out */
             int          index = (int)regs->ebx;
             pad_state_t* out   = (pad_state_t*)regs->ecx;
-            if (!out) { regs->eax = (uint32_t)-1; break; }
+            if (!uwr(out, sizeof(pad_state_t))) { regs->eax = (uint32_t)-1; break; }
 
             usb_poll();                    /* Hot-plug + future HID reports */
             gamepad_get_state(index, out);
@@ -536,7 +586,7 @@ static void syscall_handler(registers_t* regs) {
             const char*    path  = (const char*)regs->ebx;
             uint32_t       index = regs->ecx;
             dirent_info_t* out   = (dirent_info_t*)regs->edx;
-            if (!path || !out) { regs->eax = (uint32_t)-1; break; }
+            if (!ustr(path) || !uwr(out, sizeof(dirent_info_t))) { regs->eax = (uint32_t)-1; break; }
 
             vfs_node_t* dir = vfs_open(path, 0);
             if (!dir || !(dir->flags & VFS_FLAG_DIR)) { regs->eax = (uint32_t)-1; break; }
@@ -568,7 +618,7 @@ static void syscall_handler(registers_t* regs) {
             const uint8_t* buf  = (const uint8_t*)regs->ecx;
             uint32_t       len  = regs->edx;
 
-            if (!name || len > 64 * 1024) { regs->eax = (uint32_t)-1; break; }
+            if (!ustr(name) || len > 64 * 1024 || !urd(buf, len)) { regs->eax = (uint32_t)-1; break; }
             int bad = 0;
             for (int i = 0; name[i]; i++)
                 if (name[i] == '/') { bad = 1; break; }
@@ -591,7 +641,7 @@ static void syscall_handler(registers_t* regs) {
             uint8_t*    buf    = (uint8_t*)regs->ecx;
             uint32_t    maxlen = regs->edx;
 
-            if (!name || !buf) { regs->eax = (uint32_t)-1; break; }
+            if (!ustr(name) || !uwr(buf, maxlen)) { regs->eax = (uint32_t)-1; break; }
 
             regs->eax = (uint32_t)fat32_load(name, buf, maxlen);
             break;

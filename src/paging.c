@@ -354,6 +354,117 @@ void paging_map_page_to(uint64_t* pml4, uint64_t vaddr, uint64_t paddr, uint64_t
     pt[i1] = (paddr & PTE_FRAME_MASK) | flags;
 }
 
+/* ──────── Syscall pointer validation ──────── */
+
+/*
+ * The walk must run under the KERNEL PML4: table frames are referenced
+ * by physical address, and under a user CR3 the process's overlays
+ * (4 MiB region, stack) can shadow exactly those physical addresses —
+ * the same identity-map fragility that forces exec() onto the kernel
+ * PML4. Interrupts are kept off so a preemption can't restore the user
+ * CR3 mid-walk (int 0x80 is an interrupt gate, so they normally are).
+ */
+
+static inline uint64_t irq_save(void) {
+    uint64_t f;
+    asm volatile("pushfq; pop %0; cli" : "=r"(f) :: "memory");
+    return f;
+}
+
+static inline void irq_restore(uint64_t f) {
+    if (f & 0x200) asm volatile("sti");
+}
+
+/*
+ * Walk one page under the kernel CR3. Requires PRESENT|USER at every
+ * level. Returns the leaf entry (so callers can compute the physical
+ * frame), or 0 if the page is not user-accessible (or not writable
+ * when write != 0). *page_size gets 4 KiB or 2 MiB.
+ */
+static uint64_t user_walk_leaf(uint64_t* pml4, uint64_t v, int write,
+                               uint64_t* page_size) {
+    uint64_t e = pml4[idx_pml4(v)];
+    if (!(e & PTE_PRESENT) || !(e & PTE_USER)) return 0;
+    uint64_t* pdpt = entry_table(e);
+
+    e = pdpt[idx_pdpt(v)];
+    if (!(e & PTE_PRESENT) || !(e & PTE_USER)) return 0;
+    uint64_t* pd = entry_table(e);
+
+    e = pd[idx_pd(v)];
+    if (!(e & PTE_PRESENT) || !(e & PTE_USER)) return 0;
+    if (e & PTE_PS) {                   /* 2 MiB user page */
+        if (write && !(e & PTE_READ_WRITE)) return 0;
+        *page_size = PAGE_SIZE_2M;
+        return e;
+    }
+    uint64_t* pt = entry_table(e);
+
+    e = pt[idx_pt(v)];
+    if (!(e & PTE_PRESENT) || !(e & PTE_USER)) return 0;
+    if (write && !(e & PTE_READ_WRITE)) return 0;
+    *page_size = PAGE_SIZE_4K;
+    return e;
+}
+
+int paging_user_access_ok(uint64_t vaddr, uint64_t len, int write) {
+    if (len == 0) return 1;
+    uint64_t end = vaddr + len;
+    if (end < vaddr) return 0;          /* Wrap-around */
+
+    uint64_t flags = irq_save();
+    uint64_t user_cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(user_cr3));
+    write_cr3((uint64_t)(uintptr_t)kernel_pml4);
+
+    uint64_t* pml4 = (uint64_t*)(uintptr_t)(user_cr3 & PTE_FRAME_MASK);
+    int ok = 1;
+    uint64_t v = vaddr;
+    while (v < end) {
+        uint64_t psize;
+        if (!user_walk_leaf(pml4, v, write, &psize)) { ok = 0; break; }
+        v = (v & ~(psize - 1)) + psize; /* Next page */
+        if (v == 0) break;              /* Wrapped at top of address space */
+    }
+
+    write_cr3(user_cr3);
+    irq_restore(flags);
+    return ok;
+}
+
+long paging_user_str_ok(const char* s, uint64_t maxlen) {
+    uint64_t addr = (uint64_t)(uintptr_t)s;
+    long     len  = 0;
+    long     ret  = -1;
+
+    uint64_t flags = irq_save();
+    uint64_t user_cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(user_cr3));
+    write_cr3((uint64_t)(uintptr_t)kernel_pml4);
+
+    uint64_t* pml4 = (uint64_t*)(uintptr_t)(user_cr3 & PTE_FRAME_MASK);
+    while ((uint64_t)len < maxlen) {
+        uint64_t psize;
+        uint64_t leaf = user_walk_leaf(pml4, addr, 0, &psize);
+        if (!leaf) break;
+        /* Scan this page's bytes through their PHYSICAL address (the
+         * user vaddr is not mapped under the kernel CR3 we're on) */
+        uint64_t off      = addr & (psize - 1);
+        uint64_t phys     = (leaf & PTE_FRAME_MASK) + off;
+        uint64_t page_rem = psize - off;
+        while (page_rem-- && (uint64_t)len < maxlen) {
+            if (*(const char*)(uintptr_t)phys == '\0') { ret = len; goto out; }
+            phys++;
+            addr++;
+            len++;
+        }
+    }
+out:
+    write_cr3(user_cr3);
+    irq_restore(flags);
+    return ret;
+}
+
 /* ──────── Dump paging info ──────── */
 void paging_dump_info(void) {
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));

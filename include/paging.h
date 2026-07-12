@@ -35,6 +35,24 @@ uint64_t* paging_get_kernel_pd(void);
  * CPU without NX bit 63 is reserved and faults. */
 uint64_t paging_nx_flag(void);
 
+/*
+ * Syscall pointer validation (the copy_from_user substitute).
+ *
+ * Walks the CURRENT address space and verifies every page of
+ * [vaddr, vaddr+len) is mapped PRESENT|USER at every level (plus
+ * writable at the leaf when write != 0). A bare range check is NOT
+ * enough: user PML4s share the kernel identity map, so a game could
+ * otherwise hand the kernel a pointer at kernel heap/page tables and
+ * have a syscall read or write it with supervisor rights.
+ */
+int paging_user_access_ok(uint64_t vaddr, uint64_t len, int write);
+
+/* Same, for a NUL-terminated string: verifies page-by-page and scans
+ * for the terminator. Returns the string length, or -1 if any byte up
+ * to (and including) the NUL is not user-accessible or no NUL is found
+ * within maxlen bytes. */
+long paging_user_str_ok(const char* s, uint64_t maxlen);
+
 /* Identity-map a 2 MiB-aligned MMIO region into the kernel hierarchy
  * (cache-disabled). Used for device register windows discovered after
  * paging_init(), e.g. the AHCI ABAR. */
