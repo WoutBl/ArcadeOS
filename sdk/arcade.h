@@ -98,8 +98,11 @@ int      arcade_rand_range(int lo, int hi);
 
 /* ──────── The game context ──────── */
 
-#define ARCADE_MAX_W 640
-#define ARCADE_MAX_H 480
+/* Largest mode the bootloader will negotiate (see boot/stage2.asm's
+ * vbe_prefs). The static framebuffer is sized for the worst case;
+ * games always draw at the REAL size in a->w / a->h. */
+#define ARCADE_MAX_W 1024
+#define ARCADE_MAX_H 768
 
 typedef struct {
     surface_t    screen;     /* Draw into this every frame */

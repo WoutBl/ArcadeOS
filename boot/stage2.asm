@@ -223,7 +223,12 @@ start:
     mov si, msg_crlf
     call print
 
-    ; ---- 4. VBE: find and set 640x480x32 with a linear framebuffer ----
+    ; ---- 4. VBE: negotiate a 32bpp linear-framebuffer mode ----
+    ; Preference order: 640x480 (the games' native resolution), then
+    ; 800x600, then 1024x768; last resort is the FIRST 32bpp direct-
+    ; color LFB mode the BIOS offers at all (real hardware often lacks
+    ; 640x480 in VBE). The kernel and games read the actual geometry
+    ; from the boot info / SYS_GFX_INFO and adapt.
     mov di, VBE_INFO
     mov dword [di], "VBE2"      ; request VBE 2.0+ info
     mov ax, 0x4F00
@@ -231,39 +236,19 @@ start:
     cmp ax, 0x004F
     jne .vbe_fail
 
-    ; Walk the mode list (far pointer at VbeInfoBlock+0x0E)
-    mov si, [VBE_INFO + 0x0E]
-    mov ax, [VBE_INFO + 0x10]
-    mov fs, ax
-.mode_loop:
-    mov cx, [fs:si]
-    cmp cx, 0xFFFF
-    je .vbe_fail
-    add si, 2
+    xor bp, bp                  ; byte offset into vbe_prefs
+.pref_next:
+    mov cx, [vbe_prefs + bp]    ; wanted width (0 = take any)
+    mov dx, [vbe_prefs + bp + 2]
+    call vbe_find_mode          ; CF=0: BX = mode id, info block filled
+    jnc .vbe_set
+    add bp, 4
+    cmp bp, vbe_prefs_end - vbe_prefs
+    jb .pref_next
+    jmp .vbe_fail
 
-    push si
-    mov ax, 0x4F01              ; get mode info
-    mov di, VBE_MODEINFO
-    int 0x10
-    pop si
-    cmp ax, 0x004F
-    jne .mode_loop
-
-    mov ax, [VBE_MODEINFO + 0x00]   ; ModeAttributes
-    and ax, 0x0081                  ; supported + linear framebuffer
-    cmp ax, 0x0081
-    jne .mode_loop
-    cmp byte [VBE_MODEINFO + 0x1B], 6   ; direct color
-    jne .mode_loop
-    cmp word [VBE_MODEINFO + 0x12], 640
-    jne .mode_loop
-    cmp word [VBE_MODEINFO + 0x14], 480
-    jne .mode_loop
-    cmp byte [VBE_MODEINFO + 0x19], 32
-    jne .mode_loop
-
-    ; Found it: set the mode with the LFB bit
-    mov bx, cx
+.vbe_set:
+    ; Set the mode with the LFB bit
     or bx, 0x4000
     mov ax, 0x4F02
     int 0x10
@@ -300,8 +285,8 @@ start:
     jmp enter_kernel
 
 .vbe_fail:
-    ; No 640x480x32 LFB mode: boot anyway without the FB flag so the
-    ; kernel falls back to VGA text mode
+    ; No usable 32bpp LFB mode at all: boot anyway without the FB flag
+    ; so the kernel falls back to VGA text mode
     mov si, msg_vbe_err
     call print
     mov dword [BOOTINFO + MB_FLAGS], MB_FLAG_MEM | MB_FLAG_MMAP
@@ -410,6 +395,58 @@ pm_copy:
     sti
     ret
 
+; ---- VBE mode-list scan ----
+; In:  CX = wanted width (0 = accept any geometry), DX = wanted height.
+; Out: CF=0 and BX = mode id with its info at VBE_MODEINFO, or CF=1.
+; Only 32bpp direct-color modes with a linear framebuffer qualify.
+vbe_find_mode:
+    mov si, [VBE_INFO + 0x0E]   ; mode list far pointer
+    mov ax, [VBE_INFO + 0x10]
+    mov fs, ax
+.next:
+    mov bx, [fs:si]
+    cmp bx, 0xFFFF
+    je .nomatch
+    add si, 2
+
+    push cx                     ; 4F01 takes the mode in CX
+    push dx
+    push si
+    mov cx, bx
+    mov ax, 0x4F01              ; get mode info
+    mov di, VBE_MODEINFO
+    int 0x10
+    pop si
+    pop dx
+    pop cx
+    cmp ax, 0x004F
+    jne .next
+
+    mov ax, [VBE_MODEINFO + 0x00]   ; ModeAttributes
+    and ax, 0x0081                  ; supported + linear framebuffer
+    cmp ax, 0x0081
+    jne .next
+    cmp byte [VBE_MODEINFO + 0x1B], 6   ; direct color
+    jne .next
+    cmp byte [VBE_MODEINFO + 0x19], 32  ; 32 bpp
+    jne .next
+    test cx, cx                 ; wildcard pass: geometry doesn't matter
+    jz .match
+    cmp [VBE_MODEINFO + 0x12], cx
+    jne .next
+    cmp [VBE_MODEINFO + 0x14], dx
+    jne .next
+.match:
+    clc
+    ret
+.nomatch:
+    stc
+    ret
+
+; Preferred modes, best first; the 0,0 entry is the take-anything pass
+vbe_prefs:      dw 640, 480, 800, 600, 1024, 768, 0, 0
+vbe_prefs_end:
+
 ; ---- BIOS teletype print (SI = zero-terminated string) ----
 print:
     lodsb
@@ -461,4 +498,4 @@ msg_kernel:   db "Loading kernel", 0
 msg_dot:      db ".", 0
 msg_crlf:     db 13, 10, 0
 msg_disk_err: db 13, 10, "kernel read failed", 13, 10, 0
-msg_vbe_err:  db "no 640x480x32 VBE mode", 13, 10, 0
+msg_vbe_err:  db "no 32bpp VBE LFB mode", 13, 10, 0

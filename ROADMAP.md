@@ -87,11 +87,17 @@ hardware is still on the list.
     the face buttons (right stick on a DS4), waves of homing enemies,
     persistent high score. Sixth title on the volume.
 
-## Up next
+12. **Graphics: mode negotiation** (July 2026). Stage 2 walks the VBE
+    mode list with a preference order (640x480 → 800x600 → 1024x768 →
+    any 32bpp LFB mode) instead of hard-requiring 640x480, so real
+    hardware whose VBE tables lack 640x480 still gets a framebuffer.
+    Kernel blits were already pitch-aware; the SDK cap is now 1024x768
+    and games draw at the real a->w/a->h (verified: Pong fullscreen at
+    800x600). Fallout fix: the PMM reserves the [4 MiB, 8 MiB) user-
+    overlay window so driver DMA structures can never be shadowed by a
+    process's page overlays.
 
-- **Graphics: mode negotiation.** Page flipping is done; picking a mode
-  other than hardcoded 640x480 (and letting games adapt via gfx_info)
-  is the remaining half of the graphics item.
+## Up next
 
 - **PC-side game editor / dev tool (far future, just an idea).** Build an
   editor that runs on a normal PC (not on ArcadeOS itself) for putting

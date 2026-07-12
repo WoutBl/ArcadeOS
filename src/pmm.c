@@ -166,6 +166,20 @@ void pmm_init(multiboot_info_t* mboot_info) {
         used_pages++;
     }
 
+    /*
+     * Step 6: Reserve the user-overlay window [4 MiB, 8 MiB).
+     * Processes overlay their 4 KiB pages onto these VIRTUAL addresses,
+     * shadowing the identity map. Any kernel structure the kernel
+     * touches while a user CR3 is live (driver DMA rings, the GFX back
+     * buffer, ...) must never sit at these PHYSICAL addresses, or those
+     * accesses would land in the game's pages instead. Reserving the
+     * window makes the collision impossible for every allocation,
+     * present and future, at the cost of 4 MiB. (The user stack overlay
+     * at 0xBFFFC000 would have the same problem on a >3 GiB machine —
+     * this is a 128 MiB console, so only the 4 MiB window matters.)
+     */
+    pmm_mark_region_used(0x400000, 0x400000);
+
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     terminal_writestring("[PMM] Ready: ");
     terminal_writedec(pmm_get_free_pages());

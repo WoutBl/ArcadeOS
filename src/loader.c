@@ -99,6 +99,16 @@ int exec(const char* filename, char* const argv[]) {
             uint64_t vaddr  = phdr[i].p_vaddr;
             uint64_t offset = phdr[i].p_offset;
 
+            /* Segments must stay inside the [4 MiB, 8 MiB) app window:
+             * the PMM reserves exactly this physical range so user
+             * overlays can never shadow kernel allocations. */
+            if (vaddr < 0x400000 || vaddr + memsz > 0x800000) {
+                terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
+                terminal_writestring("[EXEC] Error: segment outside app window!\n");
+                kfree(file_data);
+                return -2;
+            }
+
             /*
              * W^X from the ELF program header: text/rodata segments map
              * executable but read-only; data/bss segments map writable
