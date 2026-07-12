@@ -192,9 +192,13 @@ run-ide: $(DISK)
 		-monitor unix:qemu-monitor.sock,server,nowait \
 		-no-reboot
 
+# Boot smoke test: headless QEMU + serial-marker/REST-API assertions
+test: $(DISK)
+	sh tools/smoke_test.sh
+
 # Clean build files
 clean:
-	rm -f $(OBJECTS) $(KERNEL) $(KERNEL_ELF) serial.log qemu-monitor.sock audio-out.wav arcadeos.iso
+	rm -f $(OBJECTS) $(KERNEL) $(KERNEL_ELF) serial.log serial-smoke.log qemu-monitor.sock qemu-smoke.sock audio-out.wav arcadeos.iso
 	rm -rf $(BUILD) isodir
 
 # Clean everything including the game volume
@@ -202,4 +206,4 @@ clean-all: clean
 	rm -f $(DISK)
 
 # Phony targets
-.PHONY: all run run-ds4 run-headless run-ide clean clean-all
+.PHONY: all run run-ds4 run-headless run-ide test clean clean-all

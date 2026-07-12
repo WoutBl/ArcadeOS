@@ -1,0 +1,33 @@
+name: build-and-boot
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    # macOS runner: brew ships the same x86_64-elf-gcc cross toolchain
+    # used for development, so CI builds exactly what `make` builds.
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          brew install x86_64-elf-gcc nasm qemu
+
+      - name: Build
+        run: make
+
+      - name: Boot smoke test
+        run: make test
+
+      - name: Upload serial log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-smoke-log
+          path: serial-smoke.log
+          if-no-files-found: ignore
