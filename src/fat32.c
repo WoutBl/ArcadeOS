@@ -371,9 +371,14 @@ int fat32_init(void) {
 
 /* ──────── Write support (save data) ────────
  *
- * Whole-file semantics: fat32_save() replaces a root-directory file's
- * contents atomically enough for a single-threaded console (free old
- * chain → allocate new chain → write data → update dir entry → flush).
+ * Whole-file semantics with a crash-safe ordering: the new data is
+ * written to a FRESH cluster chain while the old chain stays allocated
+ * and referenced, and the single-sector directory-entry update is the
+ * commit point (write-to-temp-then-rename, FAT-style). A power cut at
+ * any moment leaves either the complete old file or the complete new
+ * one — never a torn save. The cost: clusters written before an
+ * interrupted commit leak as allocated-but-unreferenced (bounded by
+ * one save file per crash; reclaimable by any fsck).
  */
 
 /* Update a FAT entry in every FAT copy. Keeps the read cache coherent. */
@@ -495,13 +500,14 @@ static void save_fail(const char* why) {
 static int fat32_save_impl(const char* name, const uint8_t* data, uint32_t len) {
     if (!fat_present || !name || (!data && len > 0)) { save_fail("args"); return -1; }
 
-    /* Find the file, or create a fresh entry in a free root-dir slot */
+    /* Find the file, or create a fresh entry in a free root-dir slot.
+     * The old chain is NOT freed yet — it must survive until the new
+     * chain is committed, so an interrupted save keeps the old file. */
     dirent_loc_t loc;
+    uint32_t old_first = 0;
     if (root_dir_locate(0, name, &loc)) {
-        uint32_t old_first = ((uint32_t)loc.de.first_cluster_high << 16)
-                           | loc.de.first_cluster_low;
-        if (old_first >= 2)
-            fat_free_chain(old_first);
+        old_first = ((uint32_t)loc.de.first_cluster_high << 16)
+                  | loc.de.first_cluster_low;
     } else {
         if (!root_dir_locate(1, name, &loc)) { save_fail("dir full"); return -1; }
         memset(&loc.de, 0, sizeof(loc.de));
@@ -542,11 +548,19 @@ static int fat32_save_impl(const char* name, const uint8_t* data, uint32_t len) 
         }
     }
 
-    /* Point the directory entry at the new chain and persist it */
+    /* Commit: point the directory entry at the new chain (one sector) */
     loc.de.first_cluster_low  = (uint16_t)(first_cluster & 0xFFFF);
     loc.de.first_cluster_high = (uint16_t)(first_cluster >> 16);
     loc.de.size = len;
-    if (!dirent_writeback(&loc)) { save_fail("dirent writeback"); return -1; }
+    if (!dirent_writeback(&loc)) {
+        if (first_cluster) fat_free_chain(first_cluster);
+        save_fail("dirent writeback");
+        return -1;
+    }
+
+    /* Only now is the old chain unreachable — release it */
+    if (old_first >= 2)
+        fat_free_chain(old_first);
 
     disk_flush();
     return 0;
