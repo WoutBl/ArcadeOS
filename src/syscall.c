@@ -13,11 +13,8 @@
 #include "scheduler.h"
 #include "keyboard.h"
 #include "loader.h"
-#include "fs.h"
 #include "clock.h"
-#include "vga.h"
 #include "vfs.h"
-#include "pipe.h"
 #include "fb.h"
 #include "console_gfx.h"
 #include "gamepad.h"
@@ -39,7 +36,7 @@
  * reading/writing kernel memory on the game's behalf.
  */
 #define USER_STR_MAX  256      /* Paths, filenames */
-#define USER_TEXT_MAX 4096     /* Free-text buffers (write/writefile) */
+#define USER_TEXT_MAX 4096     /* Free-text buffers (legacy strlen write) */
 
 /* Pointer the kernel will READ len bytes through */
 static int urd(const void* p, uint64_t len) {
@@ -238,164 +235,15 @@ static void syscall_handler(registers_t* regs) {
             break;
         }
 
-        case SYS_LISTDIR: {
-            char* buf = (char*)regs->ebx;
-            int max_len = regs->ecx;
-            if (max_len <= 0 || !uwr(buf, (uint64_t)max_len)) {
-                regs->eax = (uint32_t)-1;
-                break;
-            }
 
-            buf[0] = '\0';
-            int written = 0;
-            size_t current_len = strlen(current_dir);
-            for (int i = 0; i < MAX_FILES; i++) {
-                if (filesystem[i].in_use) {
-                    int in_current = 1;
-                    for (size_t j = 0; j < current_len; j++) {
-                        if (filesystem[i].path[j] != current_dir[j]) { in_current = 0; break; }
-                    }
-                    if (in_current) {
-                        const char* remainder = filesystem[i].path + current_len;
-                        if (*remainder == '/') remainder++;
 
-                        int is_direct_child = 1;
-                        for (size_t j = 0; remainder[j]; j++) {
-                            if (remainder[j] == '/' && remainder[j+1] != '\0') { is_direct_child = 0; break; }
-                        }
-                        if (strcmp(filesystem[i].path, current_dir) == 0) continue;
 
-                        if (is_direct_child && strlen(remainder) > 0) {
-                            const char* prefix = filesystem[i].is_directory ? "[DIR]  " : "[FILE] ";
-                            size_t plen = strlen(prefix);
-                            size_t nlen = strlen(filesystem[i].name);
-                            if (written + plen + nlen + 2 <= (size_t)max_len) {
-                                strcpy(buf + written, prefix); written += plen;
-                                strcpy(buf + written, filesystem[i].name); written += nlen;
-                                buf[written++] = '\n';
-                                buf[written] = '\0';
-                            }
-                        }
-                    }
-                }
-            }
-            regs->eax = written;
-            break;
-        }
 
-        case SYS_READFILE: {
-            const char* path = (const char*)regs->ebx;
-            char* buf = (char*)regs->ecx;
-            int max_len = regs->edx;
-            if (!ustr(path) || max_len <= 0 || !uwr(buf, (uint64_t)max_len)) {
-                regs->eax = (uint32_t)-1;
-                break;
-            }
-            file_t* f = fs_get_file(path);
-            if (!f) {
-                regs->eax = (uint32_t)-1;
-                break;
-            }
-            int fsize = f->size;
-            int to_copy = (fsize < max_len - 1) ? fsize : max_len - 1;
-            for (int i=0; i < to_copy; i++) buf[i] = f->content[i];
-            buf[to_copy] = '\0';
-            regs->eax = to_copy;
-            break;
-        }
 
-        case SYS_TOUCH: {
-            const char* path = (const char*)regs->ebx;
-            if (!ustr(path)) { regs->eax = (uint32_t)-1; break; }
-            regs->eax = fs_create_file(path, "");
-            break;
-        }
 
-        case SYS_RM: {
-            const char* path = (const char*)regs->ebx;
-            if (!ustr(path)) { regs->eax = (uint32_t)-1; break; }
-            regs->eax = fs_delete_file(path);
-            break;
-        }
 
-        case SYS_MKDIR: {
-            const char* path = (const char*)regs->ebx;
-            if (!ustr(path)) { regs->eax = (uint32_t)-1; break; }
-            regs->eax = fs_create_directory(path);
-            break;
-        }
 
-        case SYS_CD: {
-            const char* path = (const char*)regs->ebx;
-            if (!ustr(path)) { regs->eax = (uint32_t)-1; break; }
-            regs->eax = fs_change_directory(path);
-            break;
-        }
 
-        case SYS_PWD: {
-            char* buf = (char*)regs->ebx;
-            int max_len = regs->ecx;
-            if (max_len <= 0 || !uwr(buf, (uint64_t)max_len)) { regs->eax = (uint32_t)-1; break; }
-            int i = 0;
-            while (current_dir[i] && i < max_len - 1) { buf[i] = current_dir[i]; i++; }
-            buf[i] = '\0';
-            regs->eax = 0;
-            break;
-        }
-
-        case SYS_WRITEFILE: {
-            const char* path = (const char*)regs->ebx;
-            const char* content = (const char*)regs->ecx;
-            if (!ustr(path) ||
-                !content || paging_user_str_ok(content, USER_TEXT_MAX) < 0) {
-                regs->eax = (uint32_t)-1; break;
-            }
-            regs->eax = fs_create_file(path, content);
-            break;
-        }
-
-        case SYS_DATE: {
-            char* buf = (char*)regs->ebx;
-            int max_len = regs->ecx;
-            if (max_len < 20 || !uwr(buf, (uint64_t)max_len)) { regs->eax = (uint32_t)-1; break; }
-            uint32_t yy = current_year;
-            uint32_t mo = current_month;
-            uint32_t dd = current_day;
-            uint32_t hh = current_hours;
-            uint32_t mm = current_minutes;
-            
-            char s_yy[5], s_mo[3], s_dd[3], s_hh[3], s_mm[3];
-            num_to_str(s_yy, yy, 4);
-            num_to_str(s_mo, mo, 2);
-            num_to_str(s_dd, dd, 2);
-            num_to_str(s_hh, hh, 2);
-            num_to_str(s_mm, mm, 2);
-
-            int written = 0;
-            const char* comp[] = {s_yy, "-", s_mo, "-", s_dd, " ", s_hh, ":", s_mm, "\0"};
-            for (int k = 0; comp[k][0] != '\0'; k++) {
-                for (int l = 0; comp[k][l] != '\0'; l++) {
-                    if (written < max_len - 1) {
-                        buf[written++] = comp[k][l];
-                    }
-                }
-            }
-            buf[written] = '\0';
-            regs->eax = 0;
-            break;
-        }
-
-        case SYS_THEME: {
-            int theme_id = regs->ebx;
-            if (theme_id >= 0 && theme_id < NUM_THEMES) {
-                current_theme = theme_id;
-                terminal_setcolor(vga_entry_color(themes[current_theme].text_fg, themes[current_theme].text_bg));
-                regs->eax = 0;
-            } else {
-                regs->eax = (uint32_t)-1;
-            }
-            break;
-        }
 
         case SYS_OPEN: {
             /*
@@ -438,80 +286,8 @@ static void syscall_handler(registers_t* regs) {
             break;
         }
 
-        case SYS_PIPE: {
-            /*
-             * EBX = pointer to int[2] in user space.
-             * Creates a new pipe and allocates two FD slots in the calling
-             * process:  pipefd[0] = read end,  pipefd[1] = write end.
-             */
-            int* pipefd = (int*)regs->ebx;
-            if (!uwr(pipefd, 2 * sizeof(int)) || !current_task) { regs->eax = (uint32_t)-1; break; }
 
-            pipe_buf_t* pb = pipe_create();
-            if (!pb) { regs->eax = (uint32_t)-1; break; }
 
-            vfs_node_t* rnode = pipe_make_read_node(pb);
-            vfs_node_t* wnode = pipe_make_write_node(pb);
-            if (!rnode || !wnode) { regs->eax = (uint32_t)-1; break; }
-
-            /* Find two free FD slots */
-            int rfd = -1, wfd = -1;
-            for (int i = 3; i < MAX_FD && (rfd < 0 || wfd < 0); i++) {
-                if (current_task->fds[i] == (vfs_node_t*)0) {
-                    if (rfd < 0)      { current_task->fds[i] = rnode; rfd = i; }
-                    else if (wfd < 0) { current_task->fds[i] = wnode; wfd = i; }
-                }
-            }
-            if (rfd < 0 || wfd < 0) { regs->eax = (uint32_t)-1; break; }
-
-            pipefd[0] = rfd;
-            pipefd[1] = wfd;
-            regs->eax = 0;
-            break;
-        }
-
-        case SYS_DUP2: {
-            /*
-             * EBX = oldfd, ECX = newfd.
-             * Copies fds[oldfd] → fds[newfd] WITHOUT calling close() on the
-             * old node (the underlying pipe stays open via ref count).
-             * If newfd already has a node it is silently replaced.
-             */
-            int oldfd = (int)regs->ebx;
-            int newfd = (int)regs->ecx;
-
-            if (!current_task
-                || oldfd < 0 || oldfd >= MAX_FD
-                || newfd < 0 || newfd >= MAX_FD) {
-                regs->eax = (uint32_t)-1;
-                break;
-            }
-
-            /* Close existing newfd properly ONLY if it differs from oldfd */
-            if (oldfd != newfd && current_task->fds[newfd]) {
-                vfs_close(current_task->fds[newfd]);
-                current_task->fds[newfd] = (vfs_node_t*)0;
-            }
-
-            current_task->fds[newfd] = current_task->fds[oldfd];
-            regs->eax = (uint32_t)newfd;
-            break;
-        }
-
-        case SYS_SIGNAL: {
-            int signum = (int)regs->ebx;
-            void* handler = (void*)regs->ecx;
-            
-            if (current_task) {
-                if ((uintptr_t)handler == 1) { /* SIG_IGN */
-                    current_task->ignored_signals |= (1 << signum);
-                } else { /* SIG_DFL */
-                    current_task->ignored_signals &= ~(1 << signum);
-                }
-            }
-            regs->eax = 0;
-            break;
-        }
 
         case SYS_GFX_INFO: {
             /* EBX = gfx_info_t* – report the framebuffer geometry so the

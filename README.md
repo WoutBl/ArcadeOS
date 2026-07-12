@@ -49,7 +49,33 @@ TSS-based Ring 3 support, int 0x80 syscalls, VFS + devfs, and ATA PIO.
 | Game loading | `loader.c` | ELF loaded via VFS into a fresh page directory, 16 KiB user stack, Ring 3 entry via iret |
 | Crash safety | `paging.c` | A Ring 3 page fault kills the game and returns to the launcher instead of panicking the console |
 
-### Console syscalls (int 0x80)
+### Syscalls (int 0x80)
+
+This is the COMPLETE kernel ABI — every number not listed returns -1.
+All pointers are validated against the calling process's page tables
+(`paging_user_access_ok`); a pointer outside the process's own mapped,
+user-accessible memory makes the syscall fail instead of touching
+kernel memory.
+
+Process & I/O (inherited from the OS2.0 base):
+
+| # | Name | Purpose |
+|---|---|---|
+| 0 | `SYS_EXIT` | Terminate the calling task, wake its waiters |
+| 1 | `SYS_WRITE` | Write to an fd (routed through the VFS; 0/1/2 → `/dev/tty`) |
+| 2 | `SYS_YIELD` | Give up the CPU voluntarily |
+| 3 | `SYS_READ` | Read from an fd (stdin falls back to the keyboard) |
+| 4 | `SYS_SPAWN` | Launch an ELF (the launcher's game-start path); child inherits fds 0–2 |
+| 5 | `SYS_WAIT` | Block until a PID exits |
+| 16 | `SYS_OPEN` | Open a VFS path into the fd table |
+| 17 | `SYS_CLOSE` | Close an fd |
+
+Numbers 6–15 and 18–20 are retired: they were the OS2.0 shell ABI
+(RAM-fs file ops, pipes, dup2, signals) that no ArcadeOS app ever
+called — undocumented attack surface, now stripped from the kernel.
+The numbers stay reserved so old binaries get a clean -1.
+
+Console subsystem:
 
 | # | Name | Purpose |
 |---|---|---|

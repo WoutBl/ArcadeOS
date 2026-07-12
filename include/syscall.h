@@ -11,21 +11,15 @@
 #define SYS_READ   3
 #define SYS_SPAWN  4
 #define SYS_WAIT   5
-#define SYS_LISTDIR 6
-#define SYS_READFILE 7
-#define SYS_TOUCH  8
-#define SYS_RM     9
-#define SYS_MKDIR  10
-#define SYS_CD     11
-#define SYS_PWD    12
-#define SYS_WRITEFILE 13
-#define SYS_DATE   14
-#define SYS_THEME  15
+/*
+ * 6–15 and 18–20 are RETIRED (were the OS2.0 shell ABI: listdir,
+ * readfile, touch, rm, mkdir, cd, pwd, writefile, date, theme, pipe,
+ * dup2, signal). No ArcadeOS app ever used them and they were
+ * undocumented attack surface into the legacy RAM fs. The numbers are
+ * reserved so old binaries get a clean -1, never a different syscall.
+ */
 #define SYS_OPEN   16
 #define SYS_CLOSE  17
-#define SYS_PIPE   18
-#define SYS_DUP2   19
-#define SYS_SIGNAL 20
 
 /* Console subsystem syscalls */
 #define SYS_GFX_INFO    21   /* EBX = gfx_info_t* out */
