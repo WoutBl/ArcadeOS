@@ -16,6 +16,7 @@
 #include "fb.h"
 #include "task.h"
 #include "scheduler.h"
+#include "klog.h"
 
 /* The kernel PML4 (512 entries × 8 bytes = 4 KiB) */
 static uint64_t* kernel_pml4 = NULL;
@@ -179,6 +180,10 @@ static void page_fault_handler(registers_t* regs) {
     terminal_writestring("\n");
 
     terminal_writestring("\n  System halted.");
+
+    /* Last act: get the panic text onto the game volume, because the
+     * idle-task flusher will never run again. */
+    klog_panic_flush();
 
     for (;;) hlt();
 }

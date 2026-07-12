@@ -5,6 +5,7 @@
 #include "idt.h"
 #include "vga.h"
 #include "syscall.h"
+#include "klog.h"
 
 /* ════════════════════════ GDT ════════════════════════ */
 
@@ -142,6 +143,7 @@ void isr_handler(registers_t* regs) {
         terminal_writehex(regs->eip);
         terminal_writestring("\nSystem halted.\n");
         cli();
+        klog_panic_flush();   /* Idle-task flusher never runs again */
         for (;;) hlt();
     }
 }

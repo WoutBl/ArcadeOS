@@ -25,4 +25,11 @@ void klog_idle_flush(void);
  * copied. Used by the REST API's /api/log endpoint. */
 int klog_read(char* out, int maxlen);
 
+/* Unthrottled flush for panic paths. The panic message has already been
+ * mirrored into the ring; write it to KERNEL.LOG NOW, because the halt
+ * loop that follows never returns to the idle task. Skipped only when a
+ * FAT32 operation was interrupted mid-flight — reentering the driver
+ * then could corrupt the volume. */
+void klog_panic_flush(void);
+
 #endif /* KLOG_H */

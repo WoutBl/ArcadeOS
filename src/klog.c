@@ -36,6 +36,15 @@ int klog_read(char* out, int maxlen) {
     return (int)n;
 }
 
+void klog_panic_flush(void) {
+    if (!fat32_available()) return;
+    if (fat32_busy()) return;       /* Driver state is mid-op: unsafe */
+    flushing = 1;
+    fat32_save("KERNEL.LOG", (const uint8_t*)klog_buf, klog_len);
+    flushing = 0;
+    klog_dirty = 0;
+}
+
 void klog_idle_flush(void) {
     if (!klog_dirty) return;
     if (!fat32_available()) return;
