@@ -60,8 +60,13 @@ SDK_OBJECTS = $(BUILD)/sdk_arcade.o
 # Games / apps shipped on the FAT32 volume
 APPS = $(BUILD)/launcher.elf $(BUILD)/pong.elf $(BUILD)/snake.elf $(BUILD)/breakout.elf $(BUILD)/starcatch.elf $(BUILD)/blaster.elf
 
-# User app link flags: entry = main (no crt0), fixed base at 4 MiB
-APP_LDFLAGS = -Wl,-N,-Ttext=0x400000,--build-id=none,-e,main
+# User app link flags: entry = main (no crt0), fixed base at 4 MiB.
+# No -N: the loader enforces W^X from the ELF p_flags, so text/rodata
+# and data/bss must land in separate page-aligned segments (RX vs RW).
+# Text starts at 4 MiB + 4 KiB so the ELF-header page ld prepends to the
+# first segment sits AT 0x400000 — nothing may map below the user base
+# (user pages overlay the kernel identity map).
+APP_LDFLAGS = -Wl,-Ttext=0x401000,--build-id=none,-e,main,-z,max-page-size=0x1000
 
 # Default target
 all: $(DISK)

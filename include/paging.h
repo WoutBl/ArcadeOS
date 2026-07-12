@@ -18,6 +18,7 @@
 #define PTE_DIRTY        0x040   /* Set by CPU when page is written to */
 #define PTE_PS           0x080   /* Large page (2 MiB in a PD entry) */
 #define PTE_GLOBAL       0x100   /* Global page (not flushed on CR3 reload) */
+#define PTE_NX           (1ULL << 63) /* No-execute (requires EFER.NXE) */
 
 /* Extract physical address from an entry (bits 12-51) */
 #define PTE_FRAME_MASK   0x000FFFFFFFFFF000ULL
@@ -28,6 +29,11 @@ void paging_dump_info(void);
 
 /* Accessor for the master kernel PML4 */
 uint64_t* paging_get_kernel_pd(void);
+
+/* PTE_NX if the CPU supports no-execute and EFER.NXE is enabled, else 0.
+ * OR this into user PTE flags — never use PTE_NX directly, because on a
+ * CPU without NX bit 63 is reserved and faults. */
+uint64_t paging_nx_flag(void);
 
 /* Identity-map a 2 MiB-aligned MMIO region into the kernel hierarchy
  * (cache-disabled). Used for device register windows discovered after

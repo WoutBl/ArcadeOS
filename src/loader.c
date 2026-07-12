@@ -99,14 +99,23 @@ int exec(const char* filename, char* const argv[]) {
             uint64_t vaddr  = phdr[i].p_vaddr;
             uint64_t offset = phdr[i].p_offset;
 
+            /*
+             * W^X from the ELF program header: text/rodata segments map
+             * executable but read-only; data/bss segments map writable
+             * but no-execute. A buffer overflow in a game can no longer
+             * place code anywhere it is allowed to run.
+             */
+            uint64_t flags = PTE_PRESENT | PTE_USER;
+            if (phdr[i].p_flags & PF_W) flags |= PTE_READ_WRITE;
+            if (!(phdr[i].p_flags & PF_X)) flags |= paging_nx_flag();
+
             /* Calculate page boundaries */
             uint64_t num_pages = (memsz + (vaddr & 0xFFF) + 4095) / 4096;
             uint64_t page_vaddr = vaddr & ~(uint64_t)0xFFF;
 
             for (uint64_t p = 0; p < num_pages; p++) {
                 uint64_t phys = pmm_alloc_page();
-                /* Use flags: PRESENT | WRITABLE | USER */
-                paging_map_page_to(new_pd, page_vaddr + p * 4096, phys, PTE_PRESENT | PTE_READ_WRITE | PTE_USER);
+                paging_map_page_to(new_pd, page_vaddr + p * 4096, phys, flags);
 
                 /* Zero out memory */
                 memset((void*)(uintptr_t)phys, 0, 4096);
@@ -141,7 +150,8 @@ int exec(const char* filename, char* const argv[]) {
         uint64_t stack_phys = pmm_alloc_page();
         memset((void*)(uintptr_t)stack_phys, 0, 4096);
         paging_map_page_to(new_pd, stack_vaddr + sp * 4096, stack_phys,
-                           PTE_PRESENT | PTE_READ_WRITE | PTE_USER);
+                           PTE_PRESENT | PTE_READ_WRITE | PTE_USER
+                           | paging_nx_flag());
     }
 
     /* 6. Update current running task with isolated PML4 */

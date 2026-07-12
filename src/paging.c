@@ -24,6 +24,32 @@ static uint64_t* kernel_pml4 = NULL;
 /* Stats for dump_info */
 static uint64_t mapped_2m_pages = 0;
 
+/* PTE_NX once EFER.NXE is on, 0 on CPUs without NX (bit 63 reserved) */
+static uint64_t pte_nx = 0;
+
+uint64_t paging_nx_flag(void) {
+    return pte_nx;
+}
+
+/* Enable no-execute support: CPUID leaf 0x80000001 EDX bit 20, then
+ * EFER.NXE (MSR 0xC0000080 bit 11). Must happen before the first PTE
+ * with bit 63 is installed, or the CPU faults on a reserved bit. */
+static void nx_enable(void) {
+    uint32_t a, b, c, d;
+    asm volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                         : "a"(0x80000000u));
+    if (a < 0x80000001u) return;
+    asm volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                         : "a"(0x80000001u));
+    if (!(d & (1u << 20))) return;
+
+    uint32_t lo, hi;
+    asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xC0000080u));
+    lo |= (1u << 11);                       /* EFER.NXE */
+    asm volatile("wrmsr" :: "a"(lo), "d"(hi), "c"(0xC0000080u));
+    pte_nx = PTE_NX;
+}
+
 uint64_t* paging_get_kernel_pd(void) {
     return kernel_pml4;
 }
@@ -114,6 +140,8 @@ static void page_fault_handler(registers_t* regs) {
         terminal_writehex(faulting_addr);
         terminal_writestring(" (RIP 0x");
         terminal_writehex(regs->eip);
+        if (error_code & 0x10)
+            terminal_writestring(", NX: tried to execute data");
         terminal_writestring(") - terminated\n");
 
         current_task->state = TASK_DEAD;
@@ -195,6 +223,11 @@ void paging_init(void) {
 
     /* Step 1: Register the Page Fault handler (ISR 14) */
     register_interrupt_handler(14, page_fault_handler);
+
+    /* Step 1b: Turn on no-execute so user data/stack pages can be NX */
+    nx_enable();
+    terminal_writestring(pte_nx ? "[PAGING] NX enabled (W^X for user pages)\n"
+                                : "[PAGING] NX not supported by this CPU\n");
 
     /* Step 2: Allocate the kernel PML4 */
     kernel_pml4 = alloc_table();
