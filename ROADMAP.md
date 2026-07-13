@@ -117,7 +117,21 @@ hardware is still on the list.
     verified end to end: Enter on the USB keyboard launches a game.
     This clears the biggest real-hardware bring-up blocker.
 
+15. **Netplay foundation: UDP sockets** (July 2026). The stack grows a
+    UDP layer (`src/net.c`): a learned ARP cache with background
+    resolution, one datagram socket for the running game behind
+    `SYS_NET` (bind/send/recv, 512-byte cap), SDK wrappers
+    (`arcade_net_bind/send/recv`, `ARCADE_IP`), and a built-in RFC 862
+    echo service on port 7 that the smoke test exercises from the host
+    on every CI run. This is the client-side path the REST-only TCP
+    server never had — the remaining work for real networked
+    multiplayer is game-side (lockstep input exchange in Pong).
+
 ## Up next
+
+- **Networked multiplayer in a game.** The transport exists (UDP
+  sockets, above); wire it into Pong as a host/join 2-player mode —
+  exchange paddle inputs per frame, host simulates, peer renders.
 
 - **PC-side game editor / dev tool (far future, just an idea).** Build an
   editor that runs on a normal PC (not on ArcadeOS itself) for putting

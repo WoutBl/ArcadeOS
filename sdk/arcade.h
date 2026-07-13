@@ -116,6 +116,54 @@ static inline void sfx_gameover(void) { sfx_tone_v(1, 150, 400, 255); }
  * any determinism the game relies on — is untouched. */
 void sfx_explosion(void);
 
+/* ──────── Netplay (UDP) ────────
+ *
+ * A single datagram socket per game. IPs are host-order uint32:
+ * ARCADE_IP(10,0,2,2) is QEMU's host gateway. Datagrams cap at
+ * NET_MSG_MAX (512) bytes — send your input/state snapshot, not the
+ * framebuffer. arcade_net_send returns -2 while ARP resolves the
+ * peer; just retry on the next frame.
+ */
+
+#define ARCADE_IP(a, b, c, d) \
+    (((unsigned)(a) << 24) | ((unsigned)(b) << 16) | \
+     ((unsigned)(c) << 8) | (unsigned)(d))
+
+static inline unsigned arcade_net_local_ip(void) {
+    net_req_t rq = {0};
+    rq.op = NET_OP_INFO;
+    return (unsigned)net_op(&rq);
+}
+
+static inline int arcade_net_bind(int port) {
+    net_req_t rq = {0};
+    rq.op = NET_OP_BIND; rq.port = (uint32_t)port;
+    return net_op(&rq);
+}
+
+static inline int arcade_net_send(unsigned ip, int port,
+                                  const void* buf, int len) {
+    net_req_t rq = {0};
+    rq.op = NET_OP_SEND; rq.ip = ip; rq.port = (uint32_t)port;
+    rq.len = (uint32_t)len; rq.buf = (uint64_t)(uintptr_t)buf;
+    return net_op(&rq);
+}
+
+/* Returns bytes received (or -1 when nothing is queued); fills
+ * src_ip/src_port when non-NULL. */
+static inline int arcade_net_recv(void* buf, int maxlen,
+                                  unsigned* src_ip, int* src_port) {
+    net_req_t rq = {0};
+    rq.op = NET_OP_RECV; rq.len = (uint32_t)maxlen;
+    rq.buf = (uint64_t)(uintptr_t)buf;
+    int n = net_op(&rq);
+    if (n >= 0) {
+        if (src_ip)   *src_ip   = rq.ip;
+        if (src_port) *src_port = (int)rq.port;
+    }
+    return n;
+}
+
 /* ──────── PRNG (xorshift32, seeded from the clock) ──────── */
 
 void     arcade_srand(uint32_t seed);

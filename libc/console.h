@@ -41,6 +41,11 @@ void sound(int freq_hz, int ms);
  * the buffer can be reused as soon as this returns. Returns 0 or -1. */
 int sound_ex(const sound_req_t* rq);
 
+/* UDP netplay socket (SYS_NET): see net_req_t / NET_OP_* in
+ * console_abi.h. Returns the op's result (RECV: bytes or -1 empty;
+ * SEND: 0, -1 error, -2 ARP still resolving — retry next frame). */
+int net_op(net_req_t* rq);
+
 /* Report the current score to the kernel (served by the REST API while
  * the game runs). The SDK calls this automatically via arcade_t.score. */
 void report_score(int score);

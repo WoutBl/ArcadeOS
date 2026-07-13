@@ -34,4 +34,28 @@ void net_poll(void);      /* Drain RX + run the protocol handlers */
  * /api/status serves it while the game is alive. */
 void score_report(int score, uint32_t task_id, const char* task_name);
 
+/* ──────── UDP (netplay foundation, backs SYS_NET) ────────
+ *
+ * One datagram socket for the running game plus a built-in echo
+ * service on port 7 (the permanent self-test:
+ * `echo hi | nc -u localhost 8007` with the default hostfwd rule).
+ * IPs are host-order uint32 (10.0.2.2 = 0x0A000202).
+ */
+
+/* Bind the game socket (replaces any previous binding, clears queue) */
+int net_udp_bind(uint16_t port);
+
+/* Send a datagram. Returns 0, -1 on error, or -2 if the destination
+ * MAC is still being ARP-resolved — retry next frame. */
+int net_udp_send(uint32_t dst_ip, uint16_t dst_port,
+                 const void* buf, uint32_t len);
+
+/* Dequeue one received datagram (bound port). Returns length, or -1
+ * when the queue is empty. src_ip/src_port may be NULL. */
+int net_udp_recv(void* buf, uint32_t maxlen,
+                 uint32_t* src_ip, uint16_t* src_port);
+
+/* Our IPv4 address (host-order), 0 when no NIC is up */
+uint32_t net_local_ip(void);
+
 #endif /* NET_H */

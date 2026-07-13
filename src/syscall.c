@@ -467,6 +467,50 @@ static void syscall_handler(registers_t* regs) {
             break;
         }
 
+        case SYS_NET: {
+            /* EBX = net_req_t*. The game's UDP socket (netplay). */
+            net_req_t* rq = (net_req_t*)regs->ebx;
+            if (!uwr(rq, sizeof(net_req_t))) { regs->eax = (uint32_t)-1; break; }
+
+            switch (rq->op) {
+                case NET_OP_INFO:
+                    regs->eax = net_local_ip();
+                    break;
+                case NET_OP_BIND:
+                    regs->eax = (uint32_t)net_udp_bind((uint16_t)rq->port);
+                    break;
+                case NET_OP_SEND: {
+                    const void* p = (const void*)(uintptr_t)rq->buf;
+                    if (rq->len > NET_MSG_MAX || !urd(p, rq->len)) {
+                        regs->eax = (uint32_t)-1; break;
+                    }
+                    regs->eax = (uint32_t)net_udp_send(rq->ip,
+                                    (uint16_t)rq->port, p, rq->len);
+                    break;
+                }
+                case NET_OP_RECV: {
+                    void* p = (void*)(uintptr_t)rq->buf;
+                    if (rq->len > NET_MSG_MAX || !uwr(p, rq->len)) {
+                        regs->eax = (uint32_t)-1; break;
+                    }
+                    net_poll();          /* Fresh datagrams before we look */
+                    uint32_t sip; uint16_t sport;
+                    int n = net_udp_recv(p, rq->len, &sip, &sport);
+                    if (n >= 0) {
+                        rq->ip   = sip;
+                        rq->port = sport;
+                        rq->len  = (uint32_t)n;
+                    }
+                    regs->eax = (uint32_t)n;
+                    break;
+                }
+                default:
+                    regs->eax = (uint32_t)-1;
+                    break;
+            }
+            break;
+        }
+
         case SYS_SCORE: {
             /* Live score report for the REST API (/api/status) */
             if (current_task)

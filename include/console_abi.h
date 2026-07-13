@@ -79,4 +79,21 @@ typedef struct {
     uint64_t sample_ptr;   /* PCM: int16_t* in the caller's space */
 } sound_req_t;
 
+/* ──────── SYS_NET (UDP netplay) ──────── */
+
+#define NET_OP_INFO 0   /* Returns the console's IPv4 (0 = no NIC) */
+#define NET_OP_BIND 1   /* Bind the game's UDP socket to rq->port */
+#define NET_OP_SEND 2   /* Datagram to rq->ip:rq->port; -2 = ARP pending, retry */
+#define NET_OP_RECV 3   /* Dequeue one datagram; fills ip/port/len */
+
+#define NET_MSG_MAX 512
+
+typedef struct {
+    uint32_t op;     /* NET_OP_* */
+    uint32_t ip;     /* Host-order IPv4 (10.0.2.2 = 0x0A000202) */
+    uint32_t port;
+    uint32_t len;    /* SEND: payload bytes; RECV: buffer capacity */
+    uint64_t buf;    /* Payload pointer in the caller's space */
+} net_req_t;
+
 #endif /* CONSOLE_ABI_H */

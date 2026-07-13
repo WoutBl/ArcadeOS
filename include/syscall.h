@@ -33,6 +33,7 @@
 #define SYS_SOUND       29   /* EBX = freq Hz (0 = stop), ECX = duration ms */
 #define SYS_SCORE       30   /* EBX = current score (live, for the REST API) */
 #define SYS_SOUND_EX    31   /* EBX = sound_req_t*: mixer voices, tones + PCM */
+#define SYS_NET         32   /* EBX = net_req_t*: UDP bind/send/recv (netplay) */
 
 /* GDT segment selectors */
 #define GDT_KERNEL_CODE  0x08

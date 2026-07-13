@@ -53,7 +53,7 @@ qemu-system-x86_64 -m 128 \
     -audiodev none,id=snd0 \
     -device AC97,audiodev=snd0 \
     -machine pcspk-audiodev=snd0 \
-    -netdev user,id=n0,hostfwd=tcp::8080-:80 \
+    -netdev user,id=n0,hostfwd=tcp::8080-:80,hostfwd=udp::8007-:7 \
     -device rtl8139,netdev=n0 \
     -drive file=$IMG,format=raw,if=none,id=gamedisk \
     -device ahci,id=ahci0 \
@@ -82,6 +82,20 @@ curl -sf --max-time 5 "$API/api/games"  | grep -q 'PONG.ELF' \
     || fail "/api/games missing PONG.ELF"
 curl -sf --max-time 5 "$API/api/scores" >/dev/null \
     || fail "/api/scores unreachable"
+
+# 2b. UDP echo service (proves the netplay datagram path both ways).
+# python3 instead of nc -u: BSD nc exits before reading the reply.
+python3 - <<'PYEOF' || fail "UDP echo on port 8007 did not answer"
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(5)
+s.sendto(b"arcade", ("127.0.0.1", 8007))
+try:
+    data, _ = s.recvfrom(64)
+    sys.exit(0 if data == b"arcade" else 1)
+except socket.timeout:
+    sys.exit(1)
+PYEOF
 
 # 3. Launch a game: Enter on the launcher (retry — the launcher needs a
 #    few frames before it polls input)

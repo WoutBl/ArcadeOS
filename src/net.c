@@ -45,7 +45,9 @@ static const uint8_t our_ip[4] = { 10, 0, 2, 15 };
 #define ETH_IP   0x0800
 #define IP_ICMP  1
 #define IP_TCP   6
+#define IP_UDP   17
 #define HTTP_PORT 80
+#define UDP_ECHO_PORT 7
 
 #define FRAME_MAX 1792
 #define SEG_DATA  1400          /* TCP payload per segment */
@@ -92,6 +94,10 @@ typedef struct {
     uint16_t window, checksum, urgent;
 } __attribute__((packed)) tcp_hdr_t;
 
+typedef struct {
+    uint16_t sport, dport, len, checksum;
+} __attribute__((packed)) udp_hdr_t;
+
 #define TCP_FIN 0x01
 #define TCP_SYN 0x02
 #define TCP_RST 0x04
@@ -113,6 +119,28 @@ static struct {
 
 static uint8_t frame_out[FRAME_MAX];
 static uint8_t frame_in[FRAME_MAX];
+
+/* ──────── ARP cache (learned from every ARP we see) ──────── */
+#define ARP_CACHE 4
+static struct {
+    int     valid;
+    uint8_t ip[4];
+    uint8_t mac[6];
+} arp_cache[ARP_CACHE];
+static int arp_next = 0;
+
+/* ──────── UDP game socket ──────── */
+#define UDP_QUEUE   8
+#define UDP_MSG_MAX 512
+
+static uint16_t udp_port = 0;             /* 0 = not bound */
+static struct {
+    uint16_t len;
+    uint16_t sport;
+    uint8_t  sip[4];
+    uint8_t  data[UDP_MSG_MAX];
+} udp_q[UDP_QUEUE];
+static uint32_t udp_head = 0, udp_tail = 0;   /* tail=write, head=read */
 
 /* Response body staging (the log endpoint dominates the size) */
 static char body_buf[40960];
@@ -415,9 +443,55 @@ static void http_respond(void) {
     conn.state = TCP_FIN_SENT;
 }
 
+/* ──────── ARP cache + resolution ──────── */
+
+static void arp_learn(const uint8_t* ip, const uint8_t* mac) {
+    for (int i = 0; i < ARP_CACHE; i++) {
+        if (arp_cache[i].valid && memcmp(arp_cache[i].ip, ip, 4) == 0) {
+            memcpy(arp_cache[i].mac, mac, 6);
+            return;
+        }
+    }
+    arp_cache[arp_next].valid = 1;
+    memcpy(arp_cache[arp_next].ip, ip, 4);
+    memcpy(arp_cache[arp_next].mac, mac, 6);
+    arp_next = (arp_next + 1) % ARP_CACHE;
+}
+
+static const uint8_t* arp_find(const uint8_t* ip) {
+    for (int i = 0; i < ARP_CACHE; i++)
+        if (arp_cache[i].valid && memcmp(arp_cache[i].ip, ip, 4) == 0)
+            return arp_cache[i].mac;
+    return (const uint8_t*)0;
+}
+
+/* Broadcast a who-has request; the reply lands in the cache later */
+static void arp_request(const uint8_t* ip) {
+    eth_hdr_t* eth = (eth_hdr_t*)frame_out;
+    memset(eth->dst, 0xFF, 6);
+    memcpy(eth->src, rtl8139_mac(), 6);
+    eth->type = htons16(ETH_ARP);
+
+    arp_pkt_t* arp = (arp_pkt_t*)(frame_out + sizeof(eth_hdr_t));
+    arp->htype = htons16(1);
+    arp->ptype = htons16(ETH_IP);
+    arp->hlen = 6; arp->plen = 4;
+    arp->oper = htons16(1);
+    memcpy(arp->sha, rtl8139_mac(), 6);
+    memcpy(arp->spa, our_ip, 4);
+    memset(arp->tha, 0, 6);
+    memcpy(arp->tpa, ip, 4);
+
+    rtl8139_send(frame_out, sizeof(eth_hdr_t) + sizeof(arp_pkt_t));
+}
+
 /* ──────── Protocol handlers ──────── */
 
 static void handle_arp(const eth_hdr_t* eth, const arp_pkt_t* arp) {
+    (void)eth;
+    /* Learn the sender from every ARP we see (requests AND replies) */
+    arp_learn(arp->spa, arp->sha);
+
     if (htons16(arp->oper) != 1) return;                 /* Requests only */
     if (memcmp(arp->tpa, our_ip, 4) != 0) return;        /* For us? */
 
@@ -452,6 +526,52 @@ static void handle_icmp(const eth_hdr_t* eth, const ip_hdr_t* ip,
     r->checksum = 0;
     r->checksum = htons16(checksum16(reply, len, 0));
     send_ip(eth->src, ip->src, IP_ICMP, reply, len);
+}
+
+/* ──────── UDP ──────── */
+
+static void udp_tx(const uint8_t* dst_mac, const uint8_t* dst_ip,
+                   uint16_t sport, uint16_t dport,
+                   const void* data, uint32_t len) {
+    static uint8_t dgram[sizeof(udp_hdr_t) + UDP_MSG_MAX];
+    udp_hdr_t* udp = (udp_hdr_t*)dgram;
+    udp->sport    = htons16(sport);
+    udp->dport    = htons16(dport);
+    udp->len      = htons16((uint16_t)(sizeof(udp_hdr_t) + len));
+    udp->checksum = 0;                    /* Optional in IPv4 */
+    memcpy(dgram + sizeof(udp_hdr_t), data, len);
+    send_ip(dst_mac, dst_ip, IP_UDP, dgram, sizeof(udp_hdr_t) + len);
+}
+
+static void handle_udp(const eth_hdr_t* eth, const ip_hdr_t* ip,
+                       const uint8_t* payload, uint32_t len) {
+    if (len < sizeof(udp_hdr_t)) return;
+    const udp_hdr_t* udp = (const udp_hdr_t*)payload;
+    uint32_t dlen = htons16(udp->len);
+    if (dlen < sizeof(udp_hdr_t) || dlen > len) return;
+    dlen -= sizeof(udp_hdr_t);
+    const uint8_t* data = payload + sizeof(udp_hdr_t);
+    uint16_t dport = htons16(udp->dport);
+
+    arp_learn(ip->src, eth->src);         /* Free reverse path */
+
+    if (dport == UDP_ECHO_PORT) {         /* RFC 862, the self-test */
+        if (dlen > UDP_MSG_MAX) dlen = UDP_MSG_MAX;
+        udp_tx(eth->src, ip->src, UDP_ECHO_PORT, htons16(udp->sport),
+               data, dlen);
+        return;
+    }
+
+    if (udp_port == 0 || dport != udp_port) return;
+    if (dlen > UDP_MSG_MAX) return;       /* Game datagrams are small */
+    if (udp_tail - udp_head >= UDP_QUEUE) return;   /* Queue full: drop */
+
+    uint32_t slot = udp_tail % UDP_QUEUE;
+    udp_q[slot].len   = (uint16_t)dlen;
+    udp_q[slot].sport = htons16(udp->sport);
+    memcpy(udp_q[slot].sip, ip->src, 4);
+    memcpy(udp_q[slot].data, data, dlen);
+    udp_tail++;
 }
 
 static void handle_tcp(const eth_hdr_t* eth, const ip_hdr_t* ip,
@@ -534,6 +654,57 @@ static void handle_tcp(const eth_hdr_t* eth, const ip_hdr_t* ip,
 
 /* ──────── Public API ──────── */
 
+/* ──────── UDP public API (backs SYS_NET) ──────── */
+
+uint32_t net_local_ip(void) {
+    if (!net_up) return 0;
+    return ((uint32_t)our_ip[0] << 24) | ((uint32_t)our_ip[1] << 16)
+         | ((uint32_t)our_ip[2] << 8)  |  (uint32_t)our_ip[3];
+}
+
+int net_udp_bind(uint16_t port) {
+    if (!net_up || port == 0 || port == HTTP_PORT || port == UDP_ECHO_PORT)
+        return -1;
+    udp_port = port;
+    udp_head = udp_tail = 0;
+    return 0;
+}
+
+int net_udp_send(uint32_t dst_ip, uint16_t dst_port,
+                 const void* buf, uint32_t len) {
+    if (!net_up || udp_port == 0 || len > UDP_MSG_MAX) return -1;
+
+    uint8_t ip[4] = {
+        (uint8_t)(dst_ip >> 24), (uint8_t)(dst_ip >> 16),
+        (uint8_t)(dst_ip >> 8),  (uint8_t)dst_ip,
+    };
+    const uint8_t* mac = arp_find(ip);
+    if (!mac) {
+        arp_request(ip);        /* Resolve in the background */
+        return -2;              /* Caller retries next frame */
+    }
+    udp_tx(mac, ip, udp_port, dst_port, buf, len);
+    return 0;
+}
+
+int net_udp_recv(void* buf, uint32_t maxlen,
+                 uint32_t* src_ip, uint16_t* src_port) {
+    if (udp_head == udp_tail) return -1;
+
+    uint32_t slot = udp_head % UDP_QUEUE;
+    uint32_t n = udp_q[slot].len;
+    if (n > maxlen) n = maxlen;
+    memcpy(buf, udp_q[slot].data, n);
+    if (src_ip)
+        *src_ip = ((uint32_t)udp_q[slot].sip[0] << 24)
+                | ((uint32_t)udp_q[slot].sip[1] << 16)
+                | ((uint32_t)udp_q[slot].sip[2] << 8)
+                |  (uint32_t)udp_q[slot].sip[3];
+    if (src_port) *src_port = udp_q[slot].sport;
+    udp_head++;
+    return (int)n;
+}
+
 void net_init(void) {
     if (!rtl8139_init()) {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
@@ -573,6 +744,7 @@ void net_poll(void) {
 
             if (ip->proto == IP_ICMP)     handle_icmp(eth, ip, payload, plen);
             else if (ip->proto == IP_TCP) handle_tcp(eth, ip, payload, plen);
+            else if (ip->proto == IP_UDP) handle_udp(eth, ip, payload, plen);
         }
     }
 }

@@ -90,6 +90,7 @@ Console subsystem:
 | 29 | `SYS_SOUND` | Play a square-wave tone (EBX = Hz, ECX = ms; 0 Hz stops) |
 | 30 | `SYS_SCORE` | Report the live score (served by `/api/status` while playing) |
 | 31 | `SYS_SOUND_EX` | Mixer voices (`sound_req_t`): square tones + 16-bit mono PCM clips |
+| 32 | `SYS_NET` | UDP netplay socket (`net_req_t`): bind/send/recv, 512-byte datagrams |
 
 User-space API: `libc/console.h` (syscall wrappers + software drawing helpers).
 Shared ABI structs: `include/console_abi.h`.
