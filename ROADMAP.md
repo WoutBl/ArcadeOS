@@ -38,8 +38,7 @@ hardware is still on the list.
 5. **Audio — first pass** (July 2026). `SYS_SOUND` square-wave tones with
    two backends: AC97 PCM out on an always-running 48 kHz ring
    (`src/ac97.c`), PC speaker (`src/pcspk.c`) fallback. All games + the
-   launcher have sound effects. (Intel HDA backend and PCM
-   sample/mixing still to come.)
+   launcher have sound effects. (Intel HDA backend still to come.)
 
 6. **Game engine + SDK — first version** (July 2026). `libarcade`
    (sdk/arcade.h): fixed-timestep loop, input edge detection, fixed-point
@@ -96,6 +95,16 @@ hardware is still on the list.
     800x600). Fallout fix: the PMM reserves the [4 MiB, 8 MiB) user-
     overlay window so driver DMA structures can never be shadowed by a
     process's page overlays.
+
+13. **Audio: 4-voice mixer + PCM samples** (July 2026). The AC97 ring
+    is now fed by a kernel software mixer (`src/audio.c`): 4 voices of
+    square tones and uploaded 16-bit mono PCM clips (any rate,
+    resampled to 48 kHz), rendered just ahead of the hardware position.
+    New `SYS_SOUND_EX` + SDK helpers (`sfx_tone_v`, `sfx_pcm`,
+    `sfx_explosion`); overlapping effects now blend instead of cutting
+    each other off. BLASTER kills play a generated PCM noise burst, and
+    the console plays a PCM boot chime (which doubles as a mixer
+    self-test in every boot's audio capture).
 
 ## Up next
 

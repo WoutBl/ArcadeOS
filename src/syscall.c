@@ -430,6 +430,43 @@ static void syscall_handler(registers_t* regs) {
             break;
         }
 
+        case SYS_SOUND_EX: {
+            /* EBX = sound_req_t*. Tones and PCM clips on mixer voices.
+             * PCM data is validated then COPIED kernel-side, so the
+             * game's buffer can be reused immediately. */
+            const sound_req_t* rq = (const sound_req_t*)regs->ebx;
+            if (!urd(rq, sizeof(sound_req_t)) || rq->voice >= SOUND_VOICES) {
+                regs->eax = (uint32_t)-1; break;
+            }
+            uint8_t vol = (rq->vol > 255) ? 255 : (uint8_t)rq->vol;
+
+            switch (rq->op) {
+                case SOUND_OP_STOP:
+                    audio_stop_voice((int)rq->voice);
+                    regs->eax = 0;
+                    break;
+                case SOUND_OP_SQUARE:
+                    regs->eax = (uint32_t)audio_tone_voice((int)rq->voice,
+                                    rq->freq_hz, rq->dur_ms, vol);
+                    break;
+                case SOUND_OP_PCM: {
+                    const int16_t* smp = (const int16_t*)(uintptr_t)rq->sample_ptr;
+                    if (rq->sample_count == 0 ||
+                        rq->sample_count > SOUND_PCM_MAX ||
+                        !urd(smp, (uint64_t)rq->sample_count * 2)) {
+                        regs->eax = (uint32_t)-1; break;
+                    }
+                    regs->eax = (uint32_t)audio_pcm_play((int)rq->voice, smp,
+                                    rq->sample_count, rq->sample_rate, vol);
+                    break;
+                }
+                default:
+                    regs->eax = (uint32_t)-1;
+                    break;
+            }
+            break;
+        }
+
         case SYS_SCORE: {
             /* Live score report for the REST API (/api/status) */
             if (current_task)

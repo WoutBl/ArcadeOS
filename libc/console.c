@@ -39,6 +39,12 @@ void sound(int freq_hz, int ms) {
     asm volatile("int $0x80" : : "a"(29), "b"(freq_hz), "c"(ms) : "memory");
 }
 
+int sound_ex(const sound_req_t* rq) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(31), "b"(rq) : "memory");
+    return ret;
+}
+
 void report_score(int score) {
     asm volatile("int $0x80" : : "a"(30), "b"(score) : "memory");
 }

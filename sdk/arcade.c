@@ -172,3 +172,25 @@ int arcade_load(const char* game, int slot, void* buf, int maxlen) {
     if (slot_name(game, slot, name) != 0) return -1;
     return load_data(name, buf, maxlen);
 }
+
+/* ──────── PCM explosion (see arcade.h) ──────── */
+
+void sfx_explosion(void) {
+    static int16_t clip[4096];
+    static int generated = 0;
+
+    if (!generated) {
+        /* Decaying white noise with a touch of low-frequency rumble.
+         * Private xorshift: must not disturb the game's PRNG stream. */
+        uint32_t r = 0x9E3779B9u;
+        for (int i = 0; i < 4096; i++) {
+            r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+            int32_t noise  = (int16_t)(r & 0xFFFF) / 3;
+            int32_t rumble = ((i / 60) & 1) ? 2500 : -2500;
+            int32_t s      = noise + rumble;
+            clip[i] = (int16_t)(s * (4096 - i) / 4096);   /* Linear decay */
+        }
+        generated = 1;
+    }
+    sfx_pcm(2, clip, 4096, 11025, 220);
+}

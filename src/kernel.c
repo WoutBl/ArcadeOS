@@ -179,6 +179,7 @@ void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
 
     /* 16. Audio: AC97 PCM out, PC speaker fallback (needs the PCI scan) */
     audio_init();
+    audio_boot_chime();   /* PCM arpeggio — self-tests the mixer path */
 
     /* 16b. Networking: RTL8139 + REST API (needs the PCI scan) */
     net_init();

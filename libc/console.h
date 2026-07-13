@@ -36,6 +36,11 @@ int readdir_at(const char* path, int index, dirent_info_t* out);
  * duration in ms. Routed to AC97 PCM or the PC speaker by the kernel. */
 void sound(int freq_hz, int ms);
 
+/* Mixer access (SYS_SOUND_EX): tones and 16-bit mono PCM clips on any
+ * of the SOUND_VOICES mixer voices. PCM data is copied kernel-side, so
+ * the buffer can be reused as soon as this returns. Returns 0 or -1. */
+int sound_ex(const sound_req_t* rq);
+
 /* Report the current score to the kernel (served by the REST API while
  * the game runs). The SDK calls this automatically via arcade_t.score. */
 void report_score(int score);

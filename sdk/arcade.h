@@ -81,13 +81,40 @@ int arcade_load(const char* game, int slot, void* buf, int maxlen);
 
 /* ──────── Sound effects ──────── */
 
-/* Canned SFX so games sound consistent without tuning frequencies */
-static inline void sfx_move(void)     { sound(600, 30);  }   /* Menu blip */
-static inline void sfx_select(void)   { sound(900, 80);  }   /* Confirm */
-static inline void sfx_hit(void)      { sound(440, 40);  }   /* Ball/paddle */
-static inline void sfx_score(void)    { sound(880, 60);  }   /* Point up */
-static inline void sfx_lose(void)     { sound(160, 300); }   /* Life lost */
-static inline void sfx_gameover(void) { sound(150, 400); }
+/* Canned SFX so games sound consistent without tuning frequencies.
+ * These run on mixer voices, so overlapping effects blend instead of
+ * cutting each other off (voice 0: legacy sound(); voice 1: canned
+ * tones; voice 2: PCM effects; voice 3: reserved for the system). */
+static inline void sfx_tone_v(int voice, int freq, int ms, int vol) {
+    sound_req_t rq = {0};
+    rq.voice = (uint32_t)voice; rq.op = SOUND_OP_SQUARE;
+    rq.vol = (uint32_t)vol; rq.freq_hz = (uint32_t)freq;
+    rq.dur_ms = (uint32_t)ms;
+    sound_ex(&rq);
+}
+
+/* Play a 16-bit mono PCM clip on a voice (copied by the kernel). */
+static inline int sfx_pcm(int voice, const int16_t* data, int count,
+                          int rate, int vol) {
+    sound_req_t rq = {0};
+    rq.voice = (uint32_t)voice; rq.op = SOUND_OP_PCM;
+    rq.vol = (uint32_t)vol; rq.sample_rate = (uint32_t)rate;
+    rq.sample_count = (uint32_t)count;
+    rq.sample_ptr = (uint64_t)(uintptr_t)data;
+    return sound_ex(&rq);
+}
+
+static inline void sfx_move(void)     { sfx_tone_v(1, 600, 30, 255);  }
+static inline void sfx_select(void)   { sfx_tone_v(1, 900, 80, 255);  }
+static inline void sfx_hit(void)      { sfx_tone_v(1, 440, 40, 255);  }
+static inline void sfx_score(void)    { sfx_tone_v(1, 880, 60, 255);  }
+static inline void sfx_lose(void)     { sfx_tone_v(1, 160, 300, 255); }
+static inline void sfx_gameover(void) { sfx_tone_v(1, 150, 400, 255); }
+
+/* Noise-burst explosion, generated once and played as PCM (voice 2).
+ * Uses its own PRNG so the game's arcade_rand() sequence — and with it
+ * any determinism the game relies on — is untouched. */
+void sfx_explosion(void);
 
 /* ──────── PRNG (xorshift32, seeded from the clock) ──────── */
 

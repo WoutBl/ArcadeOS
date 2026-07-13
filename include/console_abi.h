@@ -59,4 +59,24 @@ typedef struct {
     uint32_t size;       /* Bytes (0 for dirs/devices) */
 } dirent_info_t;
 
+/* ──────── SYS_SOUND_EX ──────── */
+
+#define SOUND_VOICES     4      /* Mixer voices (kernel MIX_VOICES) */
+#define SOUND_PCM_MAX    16384  /* Max samples per PCM upload */
+
+#define SOUND_OP_STOP    0      /* Stop the voice */
+#define SOUND_OP_SQUARE  1      /* Square-wave tone */
+#define SOUND_OP_PCM     2      /* 16-bit mono PCM clip (copied) */
+
+typedef struct {
+    uint32_t voice;        /* 0..SOUND_VOICES-1 */
+    uint32_t op;           /* SOUND_OP_* */
+    uint32_t vol;          /* 0..255 */
+    uint32_t freq_hz;      /* SQUARE: tone frequency */
+    uint32_t dur_ms;       /* SQUARE: duration */
+    uint32_t sample_rate;  /* PCM: 4000..48000 Hz */
+    uint32_t sample_count; /* PCM: samples (<= SOUND_PCM_MAX) */
+    uint64_t sample_ptr;   /* PCM: int16_t* in the caller's space */
+} sound_req_t;
+
 #endif /* CONSOLE_ABI_H */

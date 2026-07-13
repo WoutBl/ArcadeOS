@@ -32,6 +32,7 @@
 #define SYS_LOAD        28   /* EBX = filename, ECX = buf, EDX = maxlen; returns bytes */
 #define SYS_SOUND       29   /* EBX = freq Hz (0 = stop), ECX = duration ms */
 #define SYS_SCORE       30   /* EBX = current score (live, for the REST API) */
+#define SYS_SOUND_EX    31   /* EBX = sound_req_t*: mixer voices, tones + PCM */
 
 /* GDT segment selectors */
 #define GDT_KERNEL_CODE  0x08

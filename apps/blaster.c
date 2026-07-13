@@ -166,6 +166,7 @@ int main(void) {
                         score += 10 * wave;
                         kills++;
                         if (score > high) { high = score; high_dirty = 1; }
+                        sfx_explosion();   /* PCM noise burst (voice 2) */
                         sound(700 + (kills % 5) * 60, 25);
                         if (kills % 15 == 0) { wave++; sfx_select(); }
                         break;

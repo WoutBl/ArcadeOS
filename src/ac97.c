@@ -6,13 +6,13 @@
  * are I/O ports: BAR0 = NAM (mixer), BAR1 = NABM (bus master).
  *
  * Design: an ALWAYS-RUNNING ring. The DMA engine is started once at init
- * on a 32-page ring of silence and never stopped: the PIT tick keeps the
- * Last Valid Index one buffer behind the hardware's Current Index (so
- * the engine never halts) and re-silences pages the hardware finished.
- * Playing a tone just writes square-wave samples into the ring ahead of
- * the hardware position — no stream open/close per sound, which host
- * audio backends (e.g. macOS coreaudio) punish with glitches and stalls,
- * and no busy-waits in the syscall path.
+ * on a 32-page ring and never stopped: the PIT tick keeps the Last Valid
+ * Index one buffer behind the hardware's Current Index (so the engine
+ * never halts) and fills pages with freshly MIXED audio a small, fixed
+ * distance ahead of the hardware position (mixer_render in audio.c —
+ * 4 voices of tones/PCM, ~2 pages ≈ 42 ms latency). No stream open/close
+ * per sound, which host audio backends (e.g. macOS coreaudio) punish
+ * with glitches and stalls, and no busy-waits in the syscall path.
  */
 
 #include "audio.h"
@@ -38,12 +38,15 @@
 #define PO_CR_RR         0x02   /* Reset registers */
 
 #define SAMPLE_RATE      48000
-#define AMPLITUDE        9000
 
 /* Ring geometry: 32 pages x 1024 stereo frames = ~680 ms of audio */
 #define RING_PAGES       32
 #define FRAMES_PER_PAGE  (4096 / 4)          /* 16-bit stereo = 4 B/frame */
 #define RING_FRAMES      (RING_PAGES * FRAMES_PER_PAGE)
+
+/* How many pages of mixed audio to keep queued ahead of the hardware.
+ * 2 pages ≈ 42 ms: new sounds start within that latency. */
+#define LOOKAHEAD_PAGES  2
 
 /* BDL entry: buffer pointer + count of 16-bit samples + flags */
 typedef struct {
@@ -58,82 +61,35 @@ static ac97_bdl_entry_t* bdl = 0;
 static int16_t* pcm  = 0;    /* RING_PAGES contiguous pages */
 static uint64_t pcm_phys = 0;
 static int present = 0;
-static uint8_t prev_civ = 0;
+static uint8_t render_page = 0;      /* Next ring page the mixer fills */
 
 int ac97_is_present(void) { return present; }
 
 static inline void nam_write(uint8_t reg, uint16_t v) { outw(nam + reg, v); }
 
-/* Zero a whole ring page (one BDL buffer worth of silence) */
-static void silence_page(int page) {
-    memset(pcm + page * FRAMES_PER_PAGE * 2, 0, 4096);
-}
-
-void ac97_stop(void) {
-    if (!present) return;
-    /* The engine keeps running — playing silence IS the stopped state */
-    for (int p = 0; p < RING_PAGES; p++)
-        silence_page(p);
-}
-
 /*
- * PIT tick (1 kHz): keep the ring alive. Each page is ~21 ms of audio,
- * so a 1 ms cadence has plenty of margin.
+ * PIT tick (1 kHz): keep the ring alive and freshly mixed. Each page is
+ * ~21 ms of audio, so a 1 ms cadence has plenty of margin.
  */
 void ac97_tick(void) {
     if (!present) return;
 
     uint8_t civ = inb(nabm + NABM_PO_CIV);
 
-    /* Re-silence the pages the hardware finished since last tick, so a
-     * tone's samples never come around again on the next ring lap */
-    while (prev_civ != civ) {
-        silence_page(prev_civ);
-        prev_civ = (uint8_t)((prev_civ + 1) % RING_PAGES);
-    }
-
     /* Keep LVI one buffer behind CIV: the engine never reaches it, so
      * it never halts */
     outb(nabm + NABM_PO_LVI, (uint8_t)((civ + RING_PAGES - 1) % RING_PAGES));
-}
 
-void ac97_tone(uint32_t freq_hz, uint32_t ms) {
-    if (!present) return;
-    if (freq_hz < 20 || freq_hz > 20000) {
-        ac97_stop();
-        return;
+    /* Render mixed audio into every page between the render cursor and
+     * CIV + LOOKAHEAD. Pages between CIV and the cursor already hold
+     * queued future audio; pages the hardware finished get fresh mix
+     * for the next lap. */
+    uint8_t target = (uint8_t)((civ + 1 + LOOKAHEAD_PAGES) % RING_PAGES);
+    while (render_page != target) {
+        mixer_render(pcm + (uint32_t)render_page * FRAMES_PER_PAGE * 2,
+                     FRAMES_PER_PAGE);
+        render_page = (uint8_t)((render_page + 1) % RING_PAGES);
     }
-
-    /* Replace whatever is queued: silence the ring, then write the new
-     * tone starting one page ahead of the hardware position (~0-21 ms
-     * latency). Interrupts off so the tick can't advance CIV mid-write;
-     * IF is restored to whatever the caller had (syscall handlers run
-     * with interrupts already disabled). */
-    uint64_t rflags;
-    asm volatile("pushfq\n\tpop %0" : "=r"(rflags));
-    cli();
-
-    for (int p = 0; p < RING_PAGES; p++)
-        silence_page(p);
-
-    uint8_t civ = inb(nabm + NABM_PO_CIV);
-    uint32_t start = ((uint32_t)((civ + 1) % RING_PAGES)) * FRAMES_PER_PAGE;
-
-    uint32_t frames = (SAMPLE_RATE / 1000) * ms;
-    uint32_t budget = (RING_PAGES - 2) * FRAMES_PER_PAGE;  /* Margin: 2 pages */
-    if (frames > budget) frames = budget;
-
-    uint32_t half_period = SAMPLE_RATE / (freq_hz * 2);
-    if (half_period == 0) half_period = 1;
-
-    for (uint32_t f = 0; f < frames; f++) {
-        int16_t s = ((f / half_period) & 1) ? -AMPLITUDE : AMPLITUDE;
-        uint32_t pos = (start + f) % RING_FRAMES;
-        pcm[pos * 2]     = s;   /* Left */
-        pcm[pos * 2 + 1] = s;   /* Right */
-    }
-
-    if (rflags & 0x200) sti();
 }
 
 int ac97_init(void) {
@@ -178,7 +134,7 @@ int ac97_init(void) {
     outl(nabm + NABM_PO_BDBAR, (uint32_t)(uintptr_t)bdl);
     outb(nabm + NABM_PO_LVI, RING_PAGES - 1);
     outw(nabm + NABM_PO_SR, 0x1C);
-    prev_civ = 0;
+    render_page = 1;                 /* CIV starts at 0 */
     outb(nabm + NABM_PO_CR, PO_CR_RPBM);
 
     present = 1;
