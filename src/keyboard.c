@@ -58,12 +58,14 @@ static void kb_push(key_event_t evt) {
     }
 }
 
-/* ──────── IRQ1 handler (called from ISR dispatcher) ──────── */
-static void keyboard_irq_handler(registers_t* regs) {
-    (void)regs;  /* unused */
-
-    uint8_t scancode = inb(KEYBOARD_DATA_PORT);
-
+/* ──────── Scancode processing ────────
+ *
+ * Shared by the PS/2 IRQ1 path and USB HID keyboards: the USB stack
+ * translates boot-protocol reports into set-1 scancodes and injects
+ * them here, so both keyboard types drive the same gamepad mapping
+ * and the same ASCII event buffer.
+ */
+void keyboard_inject_scancode(uint8_t scancode) {
     /* Feed the gamepad subsystem first (it wants raw make/break codes) */
     if (kb_raw_hook)
         kb_raw_hook(scancode);
@@ -114,6 +116,12 @@ static void keyboard_irq_handler(registers_t* regs) {
     }
 
     kb_push(evt);
+}
+
+/* ──────── IRQ1 handler (called from ISR dispatcher) ──────── */
+static void keyboard_irq_handler(registers_t* regs) {
+    (void)regs;  /* unused */
+    keyboard_inject_scancode(inb(KEYBOARD_DATA_PORT));
 }
 
 /* ──────── Public API ──────── */

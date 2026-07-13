@@ -180,6 +180,27 @@ run-headless: $(DISK)
 		-monitor unix:qemu-monitor.sock,server,nowait \
 		-no-reboot
 
+# xHCI test: headless boot with a qemu-xhci controller + USB keyboard
+# attached to it (exercises the xHCI transfer engine end to end — the
+# USB keyboard drives the same virtual pads as the PS/2 one)
+run-xhci: $(DISK)
+	qemu-system-x86_64 -m 128 \
+		-audiodev wav,id=snd0,path=audio-out.wav \
+		-device AC97,audiodev=snd0 \
+		-machine pcspk-audiodev=snd0 \
+		-netdev user,id=n0,hostfwd=tcp::8080-:80 \
+		-device rtl8139,netdev=n0 \
+		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
+		-device ahci,id=ahci0 \
+		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
+		-boot c \
+		-device qemu-xhci,id=xhci0 \
+		-device usb-kbd,bus=xhci0.0 \
+		-serial file:serial.log \
+		-display none \
+		-monitor unix:qemu-monitor.sock,server,nowait \
+		-no-reboot
+
 # Legacy IDE attach: exercises the ATA PIO fallback path
 run-ide: $(DISK)
 	qemu-system-x86_64 -m 128 \
@@ -206,4 +227,4 @@ clean-all: clean
 	rm -f $(DISK)
 
 # Phony targets
-.PHONY: all run run-ds4 run-headless run-ide test clean clean-all
+.PHONY: all run run-ds4 run-headless run-xhci run-ide test clean clean-all

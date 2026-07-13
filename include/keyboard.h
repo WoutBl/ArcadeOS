@@ -53,6 +53,11 @@ void keyboard_init(void);
  */
 void keyboard_set_raw_hook(void (*hook)(uint8_t scancode));
 
+/* Process one set-1 scancode as if it came from the PS/2 port. Used by
+ * the USB stack to feed HID boot-keyboard input through the same
+ * gamepad mapping and ASCII pipeline. */
+void keyboard_inject_scancode(uint8_t scancode);
+
 /*
  * Non-blocking: returns the next key event from the ring buffer.
  * If the buffer is empty, returns {0, 0}.

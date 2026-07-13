@@ -9,6 +9,7 @@
 #include "usb.h"
 #include "vga.h"
 #include "gamepad.h"
+#include "keyboard.h"
 #include "console_abi.h"
 
 static usb_controller_t controllers[USB_MAX_CONTROLLERS];
@@ -187,15 +188,94 @@ static void ds4_decode(const uint8_t* d, int len) {
                      d[8], d[9]);
 }
 
+/* ──────── USB boot-protocol keyboard ────────
+ *
+ * Real xHCI-only machines have no PS/2 port, so a USB keyboard must
+ * drive the console. Boot-protocol reports (8 bytes: modifiers,
+ * reserved, 6 key usages) are diffed against the previous report and
+ * translated to set-1 scancodes injected into the SAME pipeline the
+ * PS/2 keyboard uses — the two virtual pads and the ASCII buffer both
+ * work identically over USB.
+ */
+
+/* HID usage → set-1 make code for the keys the console maps.
+ * 0 = unmapped, 0x80 flag = 0xE0-prefixed (extended). */
+static uint8_t hid_usage_to_set1(uint8_t usage, int* ext) {
+    static const uint8_t letters[26] = {   /* HID 0x04..0x1D = A..Z */
+        0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24,
+        0x25, 0x26, 0x32, 0x31, 0x18, 0x19, 0x10, 0x13, 0x1F, 0x14,
+        0x16, 0x2F, 0x11, 0x2D, 0x15, 0x2C,
+    };
+    *ext = 0;
+    if (usage >= 0x04 && usage <= 0x1D) return letters[usage - 0x04];
+    if (usage >= 0x1E && usage <= 0x26) return (uint8_t)(0x02 + usage - 0x1E); /* 1-9 */
+    switch (usage) {
+        case 0x27: return 0x0B;                    /* 0 */
+        case 0x28: return 0x1C;                    /* Enter */
+        case 0x29: return 0x01;                    /* Esc */
+        case 0x2A: return 0x0E;                    /* Backspace */
+        case 0x2B: return 0x0F;                    /* Tab */
+        case 0x2C: return 0x39;                    /* Space */
+        case 0x4F: *ext = 1; return 0x4D;          /* Right arrow */
+        case 0x50: *ext = 1; return 0x4B;          /* Left arrow */
+        case 0x51: *ext = 1; return 0x50;          /* Down arrow */
+        case 0x52: *ext = 1; return 0x48;          /* Up arrow */
+        default:   return 0;
+    }
+}
+
+static void bootkbd_inject(uint8_t usage, int pressed) {
+    int ext;
+    uint8_t sc = hid_usage_to_set1(usage, &ext);
+    if (!sc) return;
+    if (ext) keyboard_inject_scancode(0xE0);
+    keyboard_inject_scancode(pressed ? sc : (uint8_t)(sc | 0x80));
+}
+
+static void bootkbd_decode(const uint8_t* d, int len) {
+    static uint8_t prev[6];
+    if (len < 8) return;
+
+    static int announced = 0;
+    if (!announced) {
+        announced = 1;
+        terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+        terminal_writestring("[USB] Keyboard input reports flowing\n");
+    }
+
+    const uint8_t* cur = d + 2;
+    /* Releases: in prev but not in cur */
+    for (int i = 0; i < 6; i++) {
+        if (!prev[i]) continue;
+        int still = 0;
+        for (int j = 0; j < 6; j++)
+            if (cur[j] == prev[i]) { still = 1; break; }
+        if (!still) bootkbd_inject(prev[i], 0);
+    }
+    /* Presses: in cur but not in prev */
+    for (int i = 0; i < 6; i++) {
+        if (!cur[i]) continue;
+        int had = 0;
+        for (int j = 0; j < 6; j++)
+            if (prev[j] == cur[i]) { had = 1; break; }
+        if (!had) bootkbd_inject(cur[i], 1);
+    }
+    memcpy(prev, cur, 6);
+}
+
 /*
  * Interrupt IN report sink, called by the HC drivers.
- * DualShock 4 reports are decoded; other HID devices are counted so
- * the transfer engine can be verified with any HID device (e.g. QEMU's
- * emulated usb-kbd).
+ * DualShock 4 reports are decoded; 8-byte reports from other HID
+ * devices are treated as boot-protocol keyboards; anything else is
+ * logged so the transfer engine can be verified with any HID device.
  */
 void usb_hid_input(usb_device_t* dev, const uint8_t* data, int len) {
     if (is_dualshock4(dev)) {
         ds4_decode(data, len);
+        return;
+    }
+    if (dev->dev_class == USB_CLASS_HID && len == 8) {
+        bootkbd_decode(data, len);
         return;
     }
 

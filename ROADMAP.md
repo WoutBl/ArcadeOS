@@ -106,6 +106,17 @@ hardware is still on the list.
     the console plays a PCM boot chime (which doubles as a mixer
     self-test in every boot's audio capture).
 
+14. **xHCI driver** (July 2026). The stub is now a working polled
+    driver (`src/xhci.c`): command + event rings, slot enable/address/
+    configure, synchronous EP0 control transfers, and a re-armed
+    interrupt IN pipe feeding usb_hid_input() — same architecture as
+    the UHCI engine, but this is what real post-2015 PCs expose.
+    USB boot-protocol keyboards are decoded into set-1 scancodes and
+    injected into the SAME input pipeline as PS/2, so both virtual pads
+    work over USB. `make run-xhci` boots QEMU with qemu-xhci + usb-kbd;
+    verified end to end: Enter on the USB keyboard launches a game.
+    This clears the biggest real-hardware bring-up blocker.
+
 ## Up next
 
 - **PC-side game editor / dev tool (far future, just an idea).** Build an
