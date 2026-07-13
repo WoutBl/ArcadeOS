@@ -465,6 +465,45 @@ out:
     return ret;
 }
 
+cr3_borrow_t paging_borrow_kernel_cr3(void) {
+    cr3_borrow_t b;
+    b.rflags = irq_save();
+    asm volatile("mov %%cr3, %0" : "=r"(b.cr3));
+    write_cr3((uint64_t)(uintptr_t)kernel_pml4);
+    return b;
+}
+
+void paging_return_cr3(cr3_borrow_t b) {
+    write_cr3(b.cr3);
+    irq_restore(b.rflags);
+}
+
+int paging_collect_user_rw(user_page_t* out, int max) {
+    static const struct { uint64_t lo, hi; } ranges[2] = {
+        { 0x400000,    0x800000    },      /* App window */
+        { 0xBFFF0000,  0xC0000000  },      /* User stack */
+    };
+
+    cr3_borrow_t b = paging_borrow_kernel_cr3();
+    uint64_t* pml4 = (uint64_t*)(uintptr_t)(b.cr3 & PTE_FRAME_MASK);
+
+    int n = 0;
+    for (int r = 0; r < 2 && n < max; r++) {
+        for (uint64_t v = ranges[r].lo; v < ranges[r].hi && n < max;
+             v += PAGE_SIZE_4K) {
+            uint64_t psize;
+            uint64_t leaf = user_walk_leaf(pml4, v, 1, &psize);
+            if (!leaf) continue;
+            out[n].vaddr = v;
+            out[n].phys  = (leaf & PTE_FRAME_MASK) + (v & (psize - 1));
+            n++;
+        }
+    }
+
+    paging_return_cr3(b);
+    return n;
+}
+
 /* ──────── Dump paging info ──────── */
 void paging_dump_info(void) {
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));

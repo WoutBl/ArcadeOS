@@ -24,6 +24,7 @@
 #include "audio.h"
 #include "net.h"
 #include "paging.h"
+#include "rewind.h"
 
 /*
  * ──────── User pointer validation ────────
@@ -318,6 +319,9 @@ static void syscall_handler(registers_t* regs) {
                 regs->eax = (uint32_t)-1;
                 break;
             }
+            /* Universal rewind: snapshot/restore at the frame boundary.
+             * Runs BEFORE the blit so a rewound frame is what appears. */
+            rewind_on_present();
             gfx_present_buffer((const uint32_t*)(uintptr_t)ptr);
             regs->eax = 0;
             break;
@@ -331,6 +335,7 @@ static void syscall_handler(registers_t* regs) {
 
             usb_poll();                    /* Hot-plug + future HID reports */
             gamepad_get_state(index, out);
+            rewind_filter_pad(index, out); /* SELECT+L1 is a system combo */
             regs->eax = 0;
             break;
         }

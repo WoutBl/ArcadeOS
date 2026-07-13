@@ -53,6 +53,24 @@ int paging_user_access_ok(uint64_t vaddr, uint64_t len, int write);
  * within maxlen bytes. */
 long paging_user_str_ok(const char* s, uint64_t maxlen);
 
+/*
+ * Borrow the kernel PML4 for identity-clean physical memory access
+ * (interrupts are disabled until returned). Needed whenever kernel
+ * code must touch arbitrary physical frames while a user CR3 may be
+ * live — user overlays shadow physical addresses otherwise.
+ */
+typedef struct { uint64_t cr3; uint64_t rflags; } cr3_borrow_t;
+cr3_borrow_t paging_borrow_kernel_cr3(void);
+void paging_return_cr3(cr3_borrow_t b);
+
+/* One writable user page: its vaddr and backing physical frame */
+typedef struct { uint64_t vaddr, phys; } user_page_t;
+
+/* Collect the CURRENT process's writable user pages (app window +
+ * stack) into out[]. Returns the count (capped at max). Used by the
+ * rewind engine to know what to snapshot. */
+int paging_collect_user_rw(user_page_t* out, int max);
+
 /* Identity-map a 2 MiB-aligned MMIO region into the kernel hierarchy
  * (cache-disabled). Used for device register windows discovered after
  * paging_init(), e.g. the AHCI ABAR. */

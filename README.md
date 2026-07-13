@@ -158,6 +158,12 @@ Launcher: up/down select, A or START to play. Pong: SELECT or B quits back
 to the launcher, START pauses, and **Y (V key) toggles 1P-vs-CPU / 2P mode**
 (player 2 moves the right paddle with W/S).
 
+**Universal rewind: SELECT+L1 (Tab+Q).** The kernel snapshots every
+running game's memory ~every 2 seconds (up to 6 snapshots) — press the
+chord to jump back one snapshot, press again to go further. Works in
+every game with zero game code: the OS does it at the frame boundary.
+The chord is a system combo, so the game never sees the SELECT press.
+
 ## Real controller (DualShock 4 over micro-USB)
 
 The UHCI driver enumerates a passed-through DualShock 4 (vendor 0x054C,

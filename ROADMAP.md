@@ -127,6 +127,20 @@ hardware is still on the list.
     server never had — the remaining work for real networked
     multiplayer is game-side (lockstep input exchange in Pong).
 
+16. **Kernel-level universal rewind, v1** (July 2026). Every Ring-3
+    game gets save-states for free, with zero cooperation from its
+    code: the kernel snapshots the process's writable pages (W^X means
+    text never changes) into a 6-slot ring every ~2 s, taken at
+    SYS_GFX_PRESENT boundaries — between frames the game's entire
+    state IS its memory, so no CPU context needs saving and restore is
+    just "return from the same syscall into your past". SELECT+L1
+    (Tab+Q) pops one snapshot per press; the chord is filtered out of
+    SYS_PAD_READ (with a grace window for the two keys arriving in
+    separate polls) so games never see a stray SELECT-quit. Costs
+    24 MiB of the 128. Verified in Pong: ball/paddles visibly jump
+    back, game keeps running. v2 ideas: input-log replay between
+    snapshots for frame-exact scrubbing, hold-to-rewind.
+
 ## Up next
 
 - **Networked multiplayer in a game.** The transport exists (UDP

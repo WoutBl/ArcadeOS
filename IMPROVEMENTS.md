@@ -4,6 +4,14 @@ Research notes from a code review pass (no code changed). Grounded in the
 actual source (`src/syscall.c`, `src/paging.c`, `src/scheduler.c`, `loader.c`)
 rather than generic OS advice.
 
+> **Status (July 2026): all items below are implemented.** W^X + NX,
+> syscall pointer validation, crash-safe saves, panic-path log flush,
+> the xHCI driver (+ USB keyboard input), VBE mode negotiation, the
+> PCM mixer, UDP netplay foundation, the syscall-surface trim + docs,
+> CI boot smoke testing, and the kernel-level universal rewind (v1,
+> snapshot ring — the input-replay refinement below remains future
+> work). See ROADMAP.md items 12–16 and the git history.
+
 ## Security / correctness
 
 - **No W^X anywhere.** Every user page (`loader.c`) is mapped
