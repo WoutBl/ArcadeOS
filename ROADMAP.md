@@ -143,9 +143,46 @@ hardware is still on the list.
 
 ## Up next
 
+- **User profiles.** Persistent usernames on the game volume, multiple
+  players, pick Player 1 (and Player 2 for 2P games) in the launcher;
+  the active session is visible to games and the REST API.
+
+- **Central highscore board.** The kernel already sees every game's
+  live score (SYS_SCORE); track the best per (game, player), persist
+  it, and show a scoreboard screen in the launcher.
+
+- **Player-select screen.** 2-player games open with a standard
+  1P-vs-CPU / 2P chooser (SDK-provided, shows the session usernames)
+  instead of a hidden toggle.
+
+- **Kernel system menu (universal pause).** SELECT+START in any game
+  freezes it and opens a kernel-drawn overlay: continue, a LIST of the
+  rewind save-states with their ages (pick one to restore), and quit
+  to menu. Zero game cooperation, like the rewind itself.
+
+- **REST API: device identity.** /api/status should report MAC, IP,
+  software version, serial number, product/model name, and play
+  status (menu vs. which game, and who is playing).
+
 - **Networked multiplayer in a game.** The transport exists (UDP
-  sockets, above); wire it into Pong as a host/join 2-player mode —
-  exchange paddle inputs per frame, host simulates, peer renders.
+  sockets); wire it into Pong as host/join — client streams inputs,
+  host simulates and streams state. Needs per-console IPs (derive from
+  the NIC MAC) and UDP broadcast for discovery.
+
+## Later
+
+- **Rewind v2: frame-exact scrubbing.** Log gamepad reads between
+  snapshots and replay them after a restore to reach any frame, plus
+  hold-to-rewind. The determinism the SDK guarantees makes it cheap.
+
+- **Intel HDA audio backend.** AC97 covers QEMU; real hardware
+  increasingly exposes HDA only.
+
+- **DHCP (or at least static-IP config).** The stack still assumes
+  slirp's 10.0.2.x world.
+
+- **PC-side game editor (far future).** Build games on a normal PC
+  with the SDK, export to removable media, console picks them up.
 
 - **PC-side game editor / dev tool (far future, just an idea).** Build an
   editor that runs on a normal PC (not on ArcadeOS itself) for putting
