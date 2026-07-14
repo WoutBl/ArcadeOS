@@ -96,4 +96,39 @@ typedef struct {
     uint64_t buf;    /* Payload pointer in the caller's space */
 } net_req_t;
 
+/* ──────── SYS_SESSION (user profiles / active players) ──────── */
+
+#define SESSION_NAME_LEN 13     /* 12 chars + NUL */
+
+#define SESSION_OP_SET 0        /* Launcher: declare the active players */
+#define SESSION_OP_GET 1        /* Game/SDK: read them back */
+
+typedef struct {
+    uint32_t op;
+    uint32_t count;             /* Active players: 1 or 2 */
+    char     p1[SESSION_NAME_LEN];
+    char     p2[SESSION_NAME_LEN];
+} session_req_t;
+
+/* ──────── Central highscore board (HISCORE0.SAV) ────────
+ *
+ * Written by the KERNEL from the live SYS_SCORE stream (best score per
+ * game + player 1); read by the launcher for the scoreboard screen.
+ */
+
+#define HISCORE_MAGIC 0x48495343u   /* 'HISC' */
+#define HISCORE_MAX   32
+
+typedef struct {
+    char    game[12];           /* "PONG", "BLASTER", ... (NUL-padded) */
+    char    user[SESSION_NAME_LEN];
+    int32_t score;
+} hiscore_entry_t;
+
+typedef struct {
+    uint32_t        magic;
+    uint32_t        count;
+    hiscore_entry_t e[HISCORE_MAX];
+} hiscore_file_t;
+
 #endif /* CONSOLE_ABI_H */

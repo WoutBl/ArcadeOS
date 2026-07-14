@@ -25,6 +25,7 @@
 #include "net.h"
 #include "paging.h"
 #include "rewind.h"
+#include "session.h"
 
 /*
  * ──────── User pointer validation ────────
@@ -517,10 +518,33 @@ static void syscall_handler(registers_t* regs) {
         }
 
         case SYS_SCORE: {
-            /* Live score report for the REST API (/api/status) */
-            if (current_task)
+            /* Live score report for the REST API (/api/status) and the
+             * central highscore board */
+            if (current_task) {
                 score_report((int)regs->ebx, current_task->id, current_task->name);
+                session_score_report((int)regs->ebx);
+            }
             regs->eax = 0;
+            break;
+        }
+
+        case SYS_SESSION: {
+            /* EBX = session_req_t*. SET declares the active players
+             * (launcher); GET reads them back (games, for name tags). */
+            session_req_t* rq = (session_req_t*)regs->ebx;
+            if (!uwr(rq, sizeof(session_req_t))) { regs->eax = (uint32_t)-1; break; }
+
+            if (rq->op == SESSION_OP_SET) {
+                rq->p1[SESSION_NAME_LEN - 1] = '\0';
+                rq->p2[SESSION_NAME_LEN - 1] = '\0';
+                session_set((int)rq->count, rq->p1, rq->p2);
+                regs->eax = 0;
+            } else if (rq->op == SESSION_OP_GET) {
+                rq->count = (uint32_t)session_players(rq->p1, rq->p2);
+                regs->eax = 0;
+            } else {
+                regs->eax = (uint32_t)-1;
+            }
             break;
         }
 

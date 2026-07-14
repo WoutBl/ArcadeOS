@@ -34,6 +34,7 @@
 #define SYS_SCORE       30   /* EBX = current score (live, for the REST API) */
 #define SYS_SOUND_EX    31   /* EBX = sound_req_t*: mixer voices, tones + PCM */
 #define SYS_NET         32   /* EBX = net_req_t*: UDP bind/send/recv (netplay) */
+#define SYS_SESSION     33   /* EBX = session_req_t*: active players (profiles) */
 
 /* GDT segment selectors */
 #define GDT_KERNEL_CODE  0x08

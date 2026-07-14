@@ -33,6 +33,7 @@
 #include "klog.h"
 #include "audio.h"
 #include "rewind.h"
+#include "session.h"
 #include "net.h"
 #include "fs.h"
 #include "fat32.h"
@@ -52,6 +53,7 @@
 static void idle_task(void) {
     while (1) {
         klog_idle_flush();        /* Persist the kernel log (throttled) */
+        session_idle_flush();     /* Persist a dirty highscore board */
         net_poll();               /* Pump the NIC + REST API */
         asm volatile("sti\nhlt"); /* Enable IRQs, then sleep */
     }
@@ -192,6 +194,7 @@ void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
     if (disk_init()) {
         if (fat32_init()) {
             vfs_mount("/games", fat32_get_root());
+            session_init();     /* Load the central highscore board */
         }
     } else {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));

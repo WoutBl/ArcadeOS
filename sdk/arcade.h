@@ -164,6 +164,27 @@ static inline int arcade_net_recv(void* buf, int maxlen,
     return n;
 }
 
+/* ──────── Session (who is playing) ────────
+ *
+ * The launcher declares the active players; games read them back for
+ * name tags. Returns the player count (1 or 2). Buffers must hold
+ * SESSION_NAME_LEN bytes.
+ */
+static inline int arcade_session(char* p1, char* p2) {
+    session_req_t rq = {0};
+    rq.op = SESSION_OP_GET;
+    if (session_op(&rq) != 0) {
+        if (p1) p1[0] = '\0';
+        if (p2) p2[0] = '\0';
+        return 1;
+    }
+    for (int i = 0; i < SESSION_NAME_LEN; i++) {
+        if (p1) p1[i] = rq.p1[i];
+        if (p2) p2[i] = rq.p2[i];
+    }
+    return (int)rq.count;
+}
+
 /* ──────── PRNG (xorshift32, seeded from the clock) ──────── */
 
 void     arcade_srand(uint32_t seed);

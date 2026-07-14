@@ -43,7 +43,7 @@ C_SOURCES = src/kernel.c src/vga.c src/serial.c src/fb.c src/console_gfx.c \
             src/keyboard.c src/gamepad.c src/pci.c src/usb.c src/uhci.c src/xhci.c \
             src/ata.c src/ahci.c src/disk.c src/klog.c src/audio.c src/ac97.c src/pcspk.c src/net.c src/rtl8139.c src/fat32.c src/fs.c src/clock.c src/heap.c src/idt.c \
             src/string.c src/pmm.c src/paging.c src/task.c src/scheduler.c \
-            src/syscall.c src/loader.c src/elf.c src/vfs.c src/devfs.c src/pipe.c src/rewind.c
+            src/syscall.c src/loader.c src/elf.c src/vfs.c src/devfs.c src/pipe.c src/rewind.c src/session.c
 
 # Object files
 C_OBJECTS = $(patsubst src/%.c,$(BUILD)/%.o,$(C_SOURCES))

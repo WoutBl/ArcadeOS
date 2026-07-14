@@ -46,6 +46,10 @@ int sound_ex(const sound_req_t* rq);
  * SEND: 0, -1 error, -2 ARP still resolving — retry next frame). */
 int net_op(net_req_t* rq);
 
+/* Active-player session (SYS_SESSION): the launcher SETs who plays,
+ * games GET it for name tags. See session_req_t in console_abi.h. */
+int session_op(session_req_t* rq);
+
 /* Report the current score to the kernel (served by the REST API while
  * the game runs). The SDK calls this automatically via arcade_t.score. */
 void report_score(int score);
