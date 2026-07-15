@@ -194,6 +194,11 @@ void gamepad_get_state(int index, pad_state_t* out) {
     pad_latch[index] = 0;
 }
 
+void gamepad_relatch(int index, uint16_t buttons) {
+    if (index < 0 || index >= PAD_MAX_CONTROLLERS) return;
+    pad_latch[index] |= buttons;
+}
+
 void gamepad_feed_usb(int index, uint16_t buttons,
                       int16_t lx, int16_t ly, int16_t rx, int16_t ry,
                       uint8_t lt, uint8_t rt) {

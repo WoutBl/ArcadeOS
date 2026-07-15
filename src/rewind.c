@@ -23,6 +23,7 @@
 #include "scheduler.h"
 #include "vga.h"
 #include "audio.h"
+#include "gamepad.h"
 #include "clock.h"
 
 #define REWIND_SLOTS      6
@@ -175,8 +176,13 @@ int rewind_filter_pad(int index, pad_state_t* st) {
             select_graced = 1;
             grace_until   = system_ticks + 150;
         }
-        if (system_ticks < grace_until)
+        if (system_ticks < grace_until) {
             st->buttons &= (uint16_t)~PAD_BTN_SELECT;
+            /* This poll consumed the press-edge latch — re-arm it, or
+             * a tapped SELECT (quit) vanishes instead of arriving
+             * after the grace window. */
+            gamepad_relatch(index, PAD_BTN_SELECT);
+        }
     } else {
         select_graced = 0;
     }

@@ -26,6 +26,11 @@ void gamepad_init(void);
 /* Snapshot the state of pad 'index' into 'out' (zeroed if invalid) */
 void gamepad_get_state(int index, pad_state_t* out);
 
+/* Re-arm press-edge latches for buttons a kernel filter withheld from
+ * the poll that consumed them (e.g. the rewind chord's SELECT grace),
+ * so the game still observes the press on a later poll. */
+void gamepad_relatch(int index, uint16_t buttons);
+
 /* Called by the USB HID layer when a report for pad 'index' arrives */
 void gamepad_feed_usb(int index, uint16_t buttons,
                       int16_t lx, int16_t ly, int16_t rx, int16_t ry,
