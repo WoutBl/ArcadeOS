@@ -4,6 +4,11 @@
  * Lists the game binaries on the FAT32 volume (/games), lets the player
  * pick one with the D-pad, and launches it with spawn()/wait(). When the
  * game exits, the launcher takes the screen back.
+ *
+ * Also owns the console's user profiles: names live in USERS0.SAV, an
+ * on-screen keyboard adds new ones, and picking Player 1 (+ optional
+ * Player 2) activates the session in the kernel (SYS_SESSION) so games
+ * and the REST API see who is playing.
  */
 
 #include "../sdk/arcade.h"
@@ -24,6 +29,68 @@ static int num_games = 0;
 /* Last-played persistence (launcher save slot 0) */
 #define LP_MAGIC 0x4C41554Eu
 typedef struct { unsigned int magic; char name[64]; } lastplayed_t;
+
+/* ──────── User profiles (USERS0.SAV) ──────── */
+
+#define US_MAGIC  0x55535253u   /* 'USRS' */
+#define MAX_USERS 8
+
+typedef struct {
+    unsigned int magic;
+    int  count;
+    char names[MAX_USERS][SESSION_NAME_LEN];
+    int  p1, p2;          /* Active player indices; -1 = none */
+} users_t;
+
+static users_t users;
+
+/* Which screen the launcher is on */
+enum { SCR_HOME, SCR_USERS, SCR_NAME };
+static int screen = SCR_HOME;
+
+static void users_load(void) {
+    users_t tmp;
+    if (arcade_load("USERS", 0, &tmp, sizeof(tmp)) == (int)sizeof(tmp) &&
+        tmp.magic == US_MAGIC &&
+        tmp.count >= 0 && tmp.count <= MAX_USERS) {
+        users = tmp;
+        if (users.p1 >= users.count) users.p1 = -1;
+        if (users.p2 >= users.count) users.p2 = -1;
+        return;
+    }
+    users.magic = US_MAGIC;
+    users.count = 0;
+    users.p1 = users.p2 = -1;
+}
+
+static void users_save(void) {
+    arcade_save("USERS", 0, &users, sizeof(users));
+}
+
+/* Push the picked players into the kernel session */
+static void apply_session(void) {
+    session_req_t rq = {0};
+    rq.op = SESSION_OP_SET;
+    if (users.p1 >= 0) strcpy(rq.p1, users.names[users.p1]);
+    else               strcpy(rq.p1, "GUEST");
+    if (users.p2 >= 0 && users.p2 != users.p1) {
+        rq.count = 2;
+        strcpy(rq.p2, users.names[users.p2]);
+    } else {
+        rq.count = 1;
+    }
+    session_op(&rq);
+}
+
+/* ──────── Small helpers ──────── */
+
+static void fmt_u(char* out, unsigned int v) {
+    int n = 0;
+    if (v == 0) out[n++] = '0';
+    while (v && n < 10) { out[n++] = (char)('0' + v % 10); v /= 10; }
+    for (int i = 0; i < n / 2; i++) { char c = out[i]; out[i] = out[n-1-i]; out[n-1-i] = c; }
+    out[n] = '\0';
+}
 
 /* Pretty titles: the 8.3 filesystem truncates long names, so map the
  * known ones back; everything else just loses the .ELF extension. */
@@ -60,23 +127,30 @@ static void scan_games(void) {
     }
 }
 
-static void draw_ui(surface_t* s, int selected, int last_idx, unsigned int t) {
+/* ──────── Home screen ──────── */
+
+static void draw_home(surface_t* s, int selected, int last_idx, unsigned int t) {
     surf_clear(s, rgb(10, 12, 34));
 
     /* Header */
     surf_fill_rect(s, 0, 0, s->w, 64, rgb(18, 22, 60));
     surf_fill_rect(s, 0, 64, s->w, 3, rgb(80, 120, 255));
     surf_draw_text(s, 24, 20, "ARCADE OS", rgb(255, 255, 255), SURF_TRANSPARENT, 3);
-    surf_draw_text(s, s->w - 168, 22, "GAME LIBRARY", rgb(120, 140, 220), SURF_TRANSPARENT, 1);
+
+    /* Who is playing (top right) */
     {
+        char line[40] = "P1 ";
+        strcpy(line + 3, users.p1 >= 0 ? users.names[users.p1] : "GUEST");
+        surf_draw_text(s, s->w - 168, 14, line, rgb(150, 200, 255), SURF_TRANSPARENT, 1);
+        if (users.p2 >= 0 && users.p2 != users.p1) {
+            char l2[40] = "P2 ";
+            strcpy(l2 + 3, users.names[users.p2]);
+            surf_draw_text(s, s->w - 168, 28, l2, rgb(255, 180, 140), SURF_TRANSPARENT, 1);
+        }
         char cnt[16];
-        int n = 0;
-        int v = num_games;
-        if (v == 0) cnt[n++] = '0';
-        while (v && n < 8) { cnt[n++] = (char)('0' + v % 10); v /= 10; }
-        for (int i = 0; i < n / 2; i++) { char c = cnt[i]; cnt[i] = cnt[n-1-i]; cnt[n-1-i] = c; }
-        strcpy(cnt + n, " GAMES");
-        surf_draw_text(s, s->w - 168, 38, cnt, rgb(90, 105, 170), SURF_TRANSPARENT, 1);
+        fmt_u(cnt, (unsigned)num_games);
+        strcpy(cnt + strlen(cnt), " GAMES");
+        surf_draw_text(s, s->w - 168, 46, cnt, rgb(90, 105, 170), SURF_TRANSPARENT, 1);
     }
 
     /* Game list */
@@ -106,10 +180,8 @@ static void draw_ui(surface_t* s, int selected, int last_idx, unsigned int t) {
             char kb[16];
             unsigned int v = games[i].size / 1024;
             if (v == 0) v = 1;
-            int n = 0;
-            while (v && n < 8) { kb[n++] = (char)('0' + v % 10); v /= 10; }
-            for (int j = 0; j < n / 2; j++) { char c = kb[j]; kb[j] = kb[n-1-j]; kb[n-1-j] = c; }
-            strcpy(kb + n, " KB");
+            fmt_u(kb, v);
+            strcpy(kb + strlen(kb), " KB");
             surf_draw_text(s, s->w - 104, y + 4, kb, rgb(90, 105, 170), SURF_TRANSPARENT, 1);
         }
         if (i == last_idx)
@@ -120,9 +192,151 @@ static void draw_ui(surface_t* s, int selected, int last_idx, unsigned int t) {
 
     /* Footer */
     surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(18, 22, 60));
-    surf_draw_text(s, 24, s->h - 24, "UP/DOWN: SELECT   A(X KEY)/START: PLAY",
+    surf_draw_text(s, 24, s->h - 24,
+                   "A(X): PLAY   Y(V): PLAYERS",
                    rgb(120, 140, 220), SURF_TRANSPARENT, 1);
 }
+
+/* ──────── Player-picker screen ──────── */
+
+/* List layout: [0..count-1] users, [count] = NEW USER,
+ * [count+1] = NOBODY (only while picking player 2). */
+static int  pick_stage;    /* 1 = choosing P1, 2 = choosing P2 */
+static int  pick_sel;
+static int  pending_p1;    /* Stage-1 choice, applied when stage 2 ends */
+
+static int pick_rows(void) {
+    return users.count + 1 + (pick_stage == 2 ? 1 : 0);
+}
+
+static void draw_users(surface_t* s) {
+    surf_clear(s, rgb(10, 12, 34));
+    surf_fill_rect(s, 0, 0, s->w, 64, rgb(30, 18, 60));
+    surf_fill_rect(s, 0, 64, s->w, 3, rgb(180, 120, 255));
+    surf_draw_text(s, 24, 20,
+                   pick_stage == 1 ? "WHO IS PLAYER 1?" : "WHO IS PLAYER 2?",
+                   rgb(255, 255, 255), SURF_TRANSPARENT, 3);
+
+    int y = 100;
+    int rows = pick_rows();
+    for (int i = 0; i < rows; i++) {
+        const char* label;
+        char tag[8] = "";
+        if (i < users.count) {
+            label = users.names[i];
+            if (i == pending_p1 && pick_stage == 2) strcpy(tag, "= P1");
+        } else if (i == users.count) {
+            label = "+ NEW USER";
+        } else {
+            label = "NOBODY (1 PLAYER)";
+        }
+
+        if (i == pick_sel) {
+            surf_fill_rect(s, 24, y - 8, s->w - 48, 40, rgb(60, 30, 110));
+            surf_draw_rect(s, 24, y - 8, s->w - 48, 40, rgb(190, 140, 255));
+            surf_draw_text(s, 36, y, ">", rgb(255, 220, 80), SURF_TRANSPARENT, 2);
+        }
+        surf_draw_text(s, 64, y, label,
+                       i == pick_sel ? rgb(255, 255, 255) : rgb(160, 150, 200),
+                       SURF_TRANSPARENT, 2);
+        if (tag[0])
+            surf_draw_text(s, s->w - 120, y + 4, tag, rgb(150, 200, 255),
+                           SURF_TRANSPARENT, 1);
+        y += 44;
+    }
+
+    surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(30, 18, 60));
+    surf_draw_text(s, 24, s->h - 24,
+                   "A(X): PICK   SELECT(TAB): DELETE   B(Z): BACK",
+                   rgb(170, 140, 220), SURF_TRANSPARENT, 1);
+}
+
+static void user_delete(int idx) {
+    if (idx < 0 || idx >= users.count) return;
+    for (int i = idx; i < users.count - 1; i++)
+        strcpy(users.names[i], users.names[i + 1]);
+    users.count--;
+    /* Fix up active indices */
+    if (users.p1 == idx) users.p1 = -1;
+    else if (users.p1 > idx) users.p1--;
+    if (users.p2 == idx) users.p2 = -1;
+    else if (users.p2 > idx) users.p2--;
+    if (pending_p1 == idx) pending_p1 = -1;
+    else if (pending_p1 > idx) pending_p1--;
+    users_save();
+    apply_session();
+}
+
+/* ──────── On-screen keyboard (new user name) ──────── */
+
+#define KB_COLS 10
+#define KB_ROWS 4
+static const char kb_grid[KB_ROWS][KB_COLS + 1] = {
+    "ABCDEFGHIJ",
+    "KLMNOPQRST",
+    "UVWXYZ0123",
+    "456789-_ .",
+};
+
+static char name_buf[SESSION_NAME_LEN];
+static int  name_len;
+static int  kb_x, kb_y;
+
+static void draw_name(surface_t* s) {
+    surf_clear(s, rgb(10, 12, 34));
+    surf_fill_rect(s, 0, 0, s->w, 64, rgb(30, 18, 60));
+    surf_fill_rect(s, 0, 64, s->w, 3, rgb(180, 120, 255));
+    surf_draw_text(s, 24, 20, "NEW USER", rgb(255, 255, 255), SURF_TRANSPARENT, 3);
+
+    /* The name being typed, with a blinking cursor cell */
+    int bx = 40, by = 100;
+    for (int i = 0; i < SESSION_NAME_LEN - 1; i++) {
+        uint32_t border = (i == name_len) ? rgb(255, 220, 80) : rgb(80, 90, 150);
+        surf_draw_rect(s, bx + i * 40, by, 34, 42, border);
+        if (i < name_len)
+            surf_draw_char(s, bx + i * 40 + 9, by + 13, name_buf[i],
+                           rgb(255, 255, 255), SURF_TRANSPARENT, 2);
+    }
+
+    /* Keyboard grid */
+    int gx = 40, gy = 190, cw = 48, ch = 44;
+    for (int r = 0; r < KB_ROWS; r++) {
+        for (int c = 0; c < KB_COLS; c++) {
+            int x = gx + c * cw, y = gy + r * ch;
+            if (r == kb_y && c == kb_x) {
+                surf_fill_rect(s, x - 4, y - 4, cw - 8, ch - 6, rgb(60, 30, 110));
+                surf_draw_rect(s, x - 4, y - 4, cw - 8, ch - 6, rgb(190, 140, 255));
+            }
+            char ch2 = kb_grid[r][c];
+            surf_draw_char(s, x + 8, y + 6, ch2 == ' ' ? '_' : ch2,
+                           (r == kb_y && c == kb_x) ? rgb(255, 255, 255)
+                                                    : rgb(160, 150, 200),
+                           SURF_TRANSPARENT, 2);
+        }
+    }
+
+    surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(30, 18, 60));
+    surf_draw_text(s, 24, s->h - 24,
+                   "A(X): TYPE   B(Z): ERASE   START(ENTER): DONE",
+                   rgb(170, 140, 220), SURF_TRANSPARENT, 1);
+}
+
+/* Commit the typed name as a new user; returns its index or -1 */
+static int name_commit(void) {
+    /* Trim trailing spaces */
+    while (name_len > 0 && name_buf[name_len - 1] == ' ') name_len--;
+    name_buf[name_len] = '\0';
+    if (name_len == 0 || users.count >= MAX_USERS) return -1;
+    /* Duplicate name: just pick the existing one */
+    for (int i = 0; i < users.count; i++)
+        if (strcmp(users.names[i], name_buf) == 0) return i;
+    strcpy(users.names[users.count], name_buf);
+    users.count++;
+    users_save();
+    return users.count - 1;
+}
+
+/* ──────── Main ──────── */
 
 int main(void) {
     arcade_t a;
@@ -132,6 +346,8 @@ int main(void) {
     }
 
     scan_games();
+    users_load();
+    apply_session();          /* Restore last session across power cycles */
 
     /* Resume on the last-played game */
     int selected = 0;
@@ -151,37 +367,126 @@ int main(void) {
     }
 
     while (arcade_frame(&a)) {
-        if ((a.pressed & PAD_BTN_DOWN) && num_games > 0) {
-            selected = (selected + 1) % num_games;
-            sfx_move();
-        }
-        if ((a.pressed & PAD_BTN_UP) && num_games > 0) {
-            selected = (selected + num_games - 1) % num_games;
-            sfx_move();
-        }
-
-        if ((a.pressed & (PAD_BTN_A | PAD_BTN_START)) && num_games > 0) {
-            sfx_select();
-            char path[80] = "/games/";
-            strcpy(path + 7, games[selected].name);
-
-            /* Remember the choice before handing over the console */
-            lastplayed_t lp;
-            lp.magic = LP_MAGIC;
-            strcpy(lp.name, games[selected].name);
-            arcade_save("LAUNCH", 0, &lp, sizeof(lp));
-            last_idx = selected;
-
-            char* game_argv[] = { path, (char*)0 };
-            int pid = spawn(path, game_argv);
-            if (pid >= 0) {
-                wait(pid);          /* Blocked until the game exits */
-                a.pad.buttons = 0xFFFF;  /* Swallow buttons held over the transition */
-                scan_games();
+        if (screen == SCR_HOME) {
+            if ((a.pressed & PAD_BTN_DOWN) && num_games > 0) {
+                selected = (selected + 1) % num_games;
+                sfx_move();
             }
+            if ((a.pressed & PAD_BTN_UP) && num_games > 0) {
+                selected = (selected + num_games - 1) % num_games;
+                sfx_move();
+            }
+            if (a.pressed & PAD_BTN_Y) {
+                sfx_select();
+                screen = SCR_USERS;
+                pick_stage = 1;
+                pick_sel = (users.p1 >= 0) ? users.p1 : 0;
+                pending_p1 = users.p1;
+            }
+
+            if ((a.pressed & (PAD_BTN_A | PAD_BTN_START)) && num_games > 0) {
+                sfx_select();
+                char path[80] = "/games/";
+                strcpy(path + 7, games[selected].name);
+
+                /* Remember the choice before handing over the console */
+                lastplayed_t lp;
+                lp.magic = LP_MAGIC;
+                strcpy(lp.name, games[selected].name);
+                arcade_save("LAUNCH", 0, &lp, sizeof(lp));
+                last_idx = selected;
+
+                char* game_argv[] = { path, (char*)0 };
+                int pid = spawn(path, game_argv);
+                if (pid >= 0) {
+                    wait(pid);          /* Blocked until the game exits */
+                    a.pad.buttons = 0xFFFF;  /* Swallow held buttons */
+                    scan_games();
+                }
+            }
+
+            draw_home(&a.screen, selected, last_idx, ticks());
         }
 
-        draw_ui(&a.screen, selected, last_idx, ticks());
+        else if (screen == SCR_USERS) {
+            int rows = pick_rows();
+            if ((a.pressed & PAD_BTN_DOWN) && rows > 0) {
+                pick_sel = (pick_sel + 1) % rows;
+                sfx_move();
+            }
+            if ((a.pressed & PAD_BTN_UP) && rows > 0) {
+                pick_sel = (pick_sel + rows - 1) % rows;
+                sfx_move();
+            }
+            if (a.pressed & PAD_BTN_B) {
+                sfx_move();
+                screen = SCR_HOME;
+            }
+            if ((a.pressed & PAD_BTN_SELECT) && pick_sel < users.count) {
+                sfx_lose();
+                user_delete(pick_sel);
+                if (pick_sel >= pick_rows()) pick_sel = pick_rows() - 1;
+            }
+            if (a.pressed & PAD_BTN_A) {
+                sfx_select();
+                if (pick_sel == users.count) {
+                    /* + NEW USER */
+                    name_len = 0;
+                    kb_x = kb_y = 0;
+                    screen = SCR_NAME;
+                } else if (pick_stage == 1) {
+                    pending_p1 = pick_sel;
+                    pick_stage = 2;
+                    pick_sel = users.count + 1;   /* Default: NOBODY */
+                    if (users.p2 >= 0 && users.p2 != pending_p1)
+                        pick_sel = users.p2;
+                } else {
+                    /* Stage 2 pick: a user or NOBODY */
+                    users.p1 = pending_p1;
+                    users.p2 = (pick_sel <= users.count - 1 &&
+                                pick_sel != pending_p1) ? pick_sel : -1;
+                    users_save();
+                    apply_session();
+                    screen = SCR_HOME;
+                }
+            }
+            draw_users(&a.screen);
+        }
+
+        else { /* SCR_NAME */
+            if (a.pressed & PAD_BTN_LEFT)  { kb_x = (kb_x + KB_COLS - 1) % KB_COLS; sfx_move(); }
+            if (a.pressed & PAD_BTN_RIGHT) { kb_x = (kb_x + 1) % KB_COLS; sfx_move(); }
+            if (a.pressed & PAD_BTN_UP)    { kb_y = (kb_y + KB_ROWS - 1) % KB_ROWS; sfx_move(); }
+            if (a.pressed & PAD_BTN_DOWN)  { kb_y = (kb_y + 1) % KB_ROWS; sfx_move(); }
+
+            if (a.pressed & PAD_BTN_A) {
+                if (name_len < SESSION_NAME_LEN - 1) {
+                    name_buf[name_len++] = kb_grid[kb_y][kb_x];
+                    sfx_hit();
+                }
+            }
+            if (a.pressed & PAD_BTN_B) {
+                if (name_len > 0) { name_len--; sfx_move(); }
+                else              { screen = SCR_USERS; }
+            }
+            if (a.pressed & PAD_BTN_START) {
+                int idx = name_commit();
+                if (idx >= 0) {
+                    sfx_score();
+                    if (pick_stage == 1) {
+                        pending_p1 = idx;
+                        pick_stage = 2;
+                        pick_sel = users.count + 1;   /* Default: NOBODY */
+                    } else {
+                        pick_sel = idx;
+                    }
+                } else {
+                    sfx_lose();
+                }
+                screen = SCR_USERS;
+            }
+            draw_name(&a.screen);
+        }
     }
 
     return 0;
