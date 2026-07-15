@@ -8,8 +8,11 @@ isodir/
 
 # Runtime / debug output
 serial.log
+serial-smoke.log
 qemu*.log
 qemu-monitor.sock
+qemu-smoke.sock
+audio-out.wav
 
 # Host noise
 .DS_Store
