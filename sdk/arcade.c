@@ -3,6 +3,7 @@
  */
 
 #include "arcade.h"
+#include "../libc/string.h"
 
 /* ──────── Framebuffer (static: user apps have no heap) ──────── */
 
@@ -193,4 +194,69 @@ void sfx_explosion(void) {
         generated = 1;
     }
     sfx_pcm(2, clip, 4096, 11025, 220);
+}
+
+/* ──────── Player-select screen (see arcade.h) ──────── */
+
+int arcade_choose_players(arcade_t* a, const char* title, unsigned flags) {
+    char p1[SESSION_NAME_LEN], p2[SESSION_NAME_LEN];
+    int  nplayers = arcade_session(p1, p2);
+    if (p1[0] == '\0') { p1[0] = 'P'; p1[1] = '1'; p1[2] = '\0'; }
+
+    /* Build the entry list */
+    const char* labels[4];
+    int         modes[4];
+    int n = 0;
+    labels[n] = "1 PLAYER  (VS CPU)";     modes[n++] = ARCADE_MODE_1P;
+    labels[n] = "2 PLAYERS (LOCAL)";      modes[n++] = ARCADE_MODE_2P;
+    if (flags & ARCADE_CHOOSE_NET) {
+        labels[n] = "HOST ONLINE GAME";   modes[n++] = ARCADE_MODE_NET_HOST;
+        labels[n] = "JOIN ONLINE GAME";   modes[n++] = ARCADE_MODE_NET_JOIN;
+    }
+
+    int sel = 0;
+    while (arcade_frame(a)) {
+        if (a->pressed & (PAD_BTN_B | PAD_BTN_SELECT)) return ARCADE_MODE_QUIT;
+        if (a->pressed & PAD_BTN_DOWN) { sel = (sel + 1) % n; sfx_move(); }
+        if (a->pressed & PAD_BTN_UP)   { sel = (sel + n - 1) % n; sfx_move(); }
+        if (a->pressed & (PAD_BTN_A | PAD_BTN_START)) {
+            sfx_select();
+            return modes[sel];
+        }
+
+        surface_t* s = &a->screen;
+        surf_clear(s, rgb(8, 10, 30));
+        surf_draw_text(s, a->w / 2 - (int)strlen(title) * 12, 60, title,
+                       rgb(255, 255, 255), SURF_TRANSPARENT, 3);
+
+        /* Who is signed in */
+        {
+            char line[48] = "P1 ";
+            strcpy(line + 3, p1);
+            if (nplayers == 2 && p2[0]) {
+                int l = (int)strlen(line);
+                strcpy(line + l, "   P2 ");
+                strcpy(line + l + 6, p2);
+            }
+            surf_draw_text(s, a->w / 2 - (int)strlen(line) * 4, 104, line,
+                           rgb(120, 140, 220), SURF_TRANSPARENT, 1);
+        }
+
+        int y = 150;
+        for (int i = 0; i < n; i++) {
+            if (i == sel) {
+                surf_fill_rect(s, a->w / 2 - 180, y - 8, 360, 36, rgb(30, 50, 130));
+                surf_draw_rect(s, a->w / 2 - 180, y - 8, 360, 36, rgb(120, 160, 255));
+            }
+            surf_draw_text(s, a->w / 2 - (int)strlen(labels[i]) * 8, y, labels[i],
+                           i == sel ? rgb(255, 255, 255) : rgb(140, 150, 190),
+                           SURF_TRANSPARENT, 2);
+            y += 46;
+        }
+
+        surf_draw_text(s, a->w / 2 - 132, a->h - 28,
+                       "A(X): START   B(Z): BACK TO MENU",
+                       rgb(120, 140, 220), SURF_TRANSPARENT, 1);
+    }
+    return ARCADE_MODE_QUIT;
 }

@@ -5,7 +5,7 @@
  * FAT32 load → ELF exec → Ring 3 → pad input syscall → gfx present syscall.
  *
  * Controls: P1 (pad 0) = arrows/left stick, P2 (pad 1) = W/S keys.
- *           Y (V key) toggles 1P (AI opponent) / 2P mode.
+ *           Opens with the SDK player-select screen (1P vs CPU / 2P).
  *           START = pause, SELECT or B = quit to launcher
  */
 
@@ -41,7 +41,11 @@ int main(void) {
     int right_y = H / 2 - paddle_h / 2;
     int score_l = 0, score_r = 0;
     int paused = 0;
-    int two_player = 0;      /* Y toggles: 0 = AI opponent, 1 = pad 1 */
+
+    /* Standard opener: pick the mode on the SDK player-select screen */
+    int mode = arcade_choose_players(&a, "PONG", 0);
+    if (mode == ARCADE_MODE_QUIT) exit(0);
+    int two_player = (mode == ARCADE_MODE_2P);
 
     save_t sv;
     int high = 0, high_dirty = 0;
@@ -69,10 +73,6 @@ int main(void) {
         }
         if (a.pressed & PAD_BTN_START)
             paused = !paused;
-        if (a.pressed & PAD_BTN_Y) {
-            two_player = !two_player;
-            sfx_select();
-        }
 
         if (!paused) {
             /* Player paddle: D-pad or analog stick */
@@ -170,7 +170,7 @@ int main(void) {
                        two_player ? rgb(120, 255, 160) : rgb(90, 100, 150),
                        SURF_TRANSPARENT, 1);
         surf_draw_text(&a.screen, 16, H - 16,
-                       "SELECT/B: QUIT  START: PAUSE  Y: 1P/2P  P2: W/S",
+                       "SELECT/B: QUIT  START: PAUSE  P2: W/S",
                        rgb(80, 90, 140), SURF_TRANSPARENT, 1);
     }
 

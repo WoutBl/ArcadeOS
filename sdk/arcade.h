@@ -116,6 +116,7 @@ static inline void sfx_gameover(void) { sfx_tone_v(1, 150, 400, 255); }
  * any determinism the game relies on — is untouched. */
 void sfx_explosion(void);
 
+
 /* ──────── Netplay (UDP) ────────
  *
  * A single datagram socket per game. IPs are host-order uint32:
@@ -232,5 +233,24 @@ int arcade_init(arcade_t* a);
  * poll the pad and compute the pressed/released edges for the NEXT
  * iteration. Always returns 1 (loop forever; games exit via exit()). */
 int arcade_frame(arcade_t* a);
+
+/* ──────── Player-select screen ────────
+ *
+ * The standard opener for 2P-capable games: shows the session
+ * usernames and lets the player pick a mode with the pad. Runs its
+ * own frame loop; returns when a mode is chosen (A) or the player
+ * backs out (B/SELECT → ARCADE_MODE_QUIT, the game should exit(0)).
+ * Pass ARCADE_CHOOSE_NET to also offer online host/join entries.
+ */
+#define ARCADE_MODE_QUIT     (-1)
+#define ARCADE_MODE_1P        0    /* vs CPU */
+#define ARCADE_MODE_2P        1    /* Local: pad 0 vs pad 1 */
+#define ARCADE_MODE_NET_HOST  2    /* Online: this console hosts */
+#define ARCADE_MODE_NET_JOIN  3    /* Online: join a host on the LAN */
+
+#define ARCADE_CHOOSE_NET     0x1
+
+int arcade_choose_players(arcade_t* a, const char* title, unsigned flags);
+
 
 #endif /* ARCADE_H */
