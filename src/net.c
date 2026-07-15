@@ -26,6 +26,7 @@
 #include "clock.h"
 #include "klog.h"
 #include "fat32.h"
+#include "session.h"
 #include "vfs.h"
 #include "pmm.h"
 #include "task.h"
@@ -271,9 +272,56 @@ static void tcp_send(uint8_t flags, const void* data, uint32_t len) {
 
 /* ──────── REST API ──────── */
 
+static char* sappend_hex8(char* p, uint8_t v) {
+    static const char hx[] = "0123456789ab" "cdef";
+    *p++ = hx[v >> 4];
+    *p++ = hx[v & 0xF];
+    return p;
+}
+
+/* Append the running game's pretty name ("/games/PONG.ELF" → "PONG");
+ * appends nothing and returns 0 when no game task is alive. */
+static int append_running_game(char** pp) {
+    for (int i = 0; i < num_tasks; i++) {
+        if (tasks[i].state == TASK_DEAD) continue;
+        const char* n = tasks[i].name;
+        if (strncmp(n, "/games/", 7) != 0) continue;
+        if (strcmp(n, "/games/LAUNCHER.ELF") == 0) continue;
+
+        char* p = *pp;
+        char* q = p;
+        p = sappend(p, n + 7);
+        if (p - q > 4 && strncmp(p - 4, ".ELF", 4) == 0) p -= 4;
+        *pp = p;
+        return 1;
+    }
+    return 0;
+}
+
 static uint32_t build_status(char* p0) {
+    const uint8_t* mac = rtl8139_mac();
     char* p = p0;
+
+    /* Device identity */
     p = sappend(p, "{\"os\":\"ArcadeOS\",\"version\":\"" OS_VERSION "\",");
+    p = sappend(p, "\"product\":\"ArcadeOS Console\",\"model\":\"AOS-1\",");
+    /* Serial number: stable per console, derived from the NIC MAC */
+    p = sappend(p, "\"serial\":\"AOS1-");
+    for (int i = 3; i < 6; i++)
+        p = sappend_hex8(p, mac[i]);
+    p = sappend(p, "\",\"mac\":\"");
+    for (int i = 0; i < 6; i++) {
+        if (i) *p++ = ':';
+        p = sappend_hex8(p, mac[i]);
+    }
+    p = sappend(p, "\",\"ip\":\"");
+    for (int i = 0; i < 4; i++) {
+        if (i) *p++ = '.';
+        p = sappend_u(p, our_ip[i]);
+    }
+    p = sappend(p, "\",");
+
+    /* Vitals */
     p = sappend(p, "\"uptime_ms\":");
     p = sappend_u(p, system_ticks);
     p = sappend(p, ",\"tasks\":");
@@ -282,16 +330,46 @@ static uint32_t build_status(char* p0) {
     p = sappend_u(p, pmm_get_free_pages());
     p = sappend(p, ",\"free_kib\":");
     p = sappend_u(p, pmm_get_free_pages() * 4);
+
+    /* Play status + who is playing */
+    p = sappend(p, ",\"status\":\"");
+    char* game_probe = p;
+    (void)game_probe;
+    {
+        char tmp_game[32];
+        char* tg = tmp_game;
+        int playing;
+        {
+            char* saved = tg;
+            playing = append_running_game(&tg);
+            *tg = '\0';
+            tg = saved;
+        }
+        p = sappend(p, playing ? "playing" : "menu");
+        p = sappend(p, "\"");
+        if (playing) {
+            p = sappend(p, ",\"game\":\"");
+            p = sappend(p, tmp_game);
+            p = sappend(p, "\"");
+        }
+    }
+
+    {
+        char p1[SESSION_NAME], p2[SESSION_NAME];
+        int count = session_players(p1, p2);
+        p = sappend(p, ",\"players\":[\"");
+        p = sappend(p, p1);
+        p = sappend(p, "\"");
+        if (count == 2) {
+            p = sappend(p, ",\"");
+            p = sappend(p, p2);
+            p = sappend(p, "\"");
+        }
+        p = sappend(p, "]");
+    }
+
     if (live_score_active()) {
-        /* Strip the /games/ prefix and .ELF suffix for readability */
-        const char* nm = live_name;
-        if (strncmp(nm, "/games/", 7) == 0) nm += 7;
-        p = sappend(p, ",\"playing\":\"");
-        char* q = p;
-        p = sappend(p, nm);
-        /* Trim trailing .ELF */
-        if (p - q > 4 && strncmp(p - 4, ".ELF", 4) == 0) p -= 4;
-        p = sappend(p, "\",\"score\":");
+        p = sappend(p, ",\"score\":");
         p = sappend_u(p, (uint32_t)(live_score < 0 ? 0 : live_score));
     }
     p = sappend(p, "}\n");
