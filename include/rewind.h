@@ -33,4 +33,12 @@ void rewind_on_present(void);
  * from the game. Returns 1 when the chord is active (pad was cleared). */
 int rewind_filter_pad(int index, pad_state_t* st);
 
+/* Snapshot introspection for the system menu. Index 0 = newest. */
+int      rewind_snapshot_count(void);
+uint32_t rewind_snapshot_age_ms(int i);
+
+/* Ask for snapshot i (0 = newest) to be restored at the next present —
+ * everything newer than it is discarded. */
+void rewind_request_restore(int i);
+
 #endif /* REWIND_H */

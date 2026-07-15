@@ -24,6 +24,7 @@
 #include "audio.h"
 #include "net.h"
 #include "paging.h"
+#include "sysmenu.h"
 #include "rewind.h"
 #include "session.h"
 
@@ -324,6 +325,7 @@ static void syscall_handler(registers_t* regs) {
              * Runs BEFORE the blit so a rewound frame is what appears. */
             rewind_on_present();
             gfx_present_buffer((const uint32_t*)(uintptr_t)ptr);
+            sysmenu_on_present();  /* SELECT+START menu (may block) */
             regs->eax = 0;
             break;
         }

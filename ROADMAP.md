@@ -159,12 +159,16 @@ hardware is still on the list.
     with two QEMU instances on a socket-netdev wire (10.0.2.10 vs
     .11): discovery, paddle control, scoring, and quit propagation.
 
-## Up next
+20. **Kernel system menu — universal pause** (July 2026). SELECT+START
+    (Tab+Enter) in any game freezes it inside its own SYS_GFX_PRESENT
+    and opens a kernel-drawn overlay (src/sysmenu.c): CONTINUE, one
+    line per rewind snapshot with its age (picking one restores it via
+    the rewind engine), and QUIT TO LAUNCHER (SYS_EXIT semantics
+    without the game's cooperation). The launcher itself is exempt.
+    Verified in Pong: menu over the frozen game, restore stepped the
+    score back, quit returned to the home screen.
 
-- **Kernel system menu (universal pause).** SELECT+START in any game
-  freezes it and opens a kernel-drawn overlay: continue, a LIST of the
-  rewind save-states with their ages (pick one to restore), and quit
-  to menu. Zero game cooperation, like the rewind itself.
+## Up next
 
 ## Later
 

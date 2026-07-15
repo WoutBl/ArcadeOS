@@ -25,12 +25,14 @@
 #include "audio.h"
 #include "gamepad.h"
 #include "clock.h"
+#include "sysmenu.h"
 
 #define REWIND_SLOTS      6
 #define REWIND_MAX_PAGES  1024          /* 4 MiB per slot */
 #define SNAP_INTERVAL     120           /* Presents between snapshots (~2 s) */
 
-#define CHORD (PAD_BTN_SELECT | PAD_BTN_L1)
+#define CHORD      (PAD_BTN_SELECT | PAD_BTN_L1)     /* Instant rewind */
+#define MENU_CHORD (PAD_BTN_SELECT | PAD_BTN_START)  /* System menu */
 
 static uint64_t slots[REWIND_SLOTS];    /* Physical buffer per slot */
 static int      enabled = 0;
@@ -46,7 +48,10 @@ static int         npages = 0;
 
 static uint32_t presents_since_snap = 0;
 static int      chord_was_down = 0;
+static int      menu_chord_was_down = 0;
 static volatile int rewind_requested = 0;
+static int      rewind_pop_n = 1;       /* Snapshots to pop on restore */
+static uint32_t slot_time[REWIND_SLOTS];/* system_ticks per snapshot */
 
 void rewind_init(void) {
     for (int i = 0; i < REWIND_SLOTS; i++) {
@@ -88,14 +93,36 @@ static void take_snapshot(void) {
         ring_count--;
     }
     slot_copy(slot, 0);
+    slot_time[slot] = system_ticks;
     ring_count++;
+}
+
+int rewind_snapshot_count(void) {
+    return enabled ? ring_count : 0;
+}
+
+uint32_t rewind_snapshot_age_ms(int i) {
+    if (!enabled || i < 0 || i >= ring_count) return 0;
+    int slot = (ring_base + ring_count - 1 - i) % REWIND_SLOTS;
+    return system_ticks - slot_time[slot];
+}
+
+void rewind_request_restore(int i) {
+    if (!enabled || ring_count == 0) return;
+    if (i < 0) i = 0;
+    if (i >= ring_count) i = ring_count - 1;
+    rewind_pop_n = i + 1;
+    rewind_requested = 1;
 }
 
 static void do_rewind(void) {
     if (ring_count == 0) return;
 
-    /* Pop the newest snapshot and restore it */
-    ring_count--;
+    /* Pop rewind_pop_n snapshots and restore the last one popped
+     * (1 = the newest; the system menu can ask for older ones) */
+    ring_count -= rewind_pop_n;
+    if (ring_count < 0) ring_count = 0;
+    rewind_pop_n = 1;
     int slot = (ring_base + ring_count) % REWIND_SLOTS;
     slot_copy(slot, 1);
 
@@ -144,6 +171,20 @@ int rewind_filter_pad(int index, pad_state_t* st) {
 
     if (!enabled || index != 0) return 0;
 
+    /* SELECT+START: system menu (armed here, opened at next present) */
+    int mchord = (st->buttons & MENU_CHORD) == MENU_CHORD;
+    if (mchord) {
+        if (!menu_chord_was_down)
+            sysmenu_request();
+        menu_chord_was_down = 1;
+        select_graced = 0;
+        st->buttons = 0;
+        st->lx = st->ly = st->rx = st->ry = 0;
+        cooldown_until = system_ticks + 400;
+        return 1;
+    }
+    menu_chord_was_down = 0;
+
     int chord = (st->buttons & CHORD) == CHORD;
     if (chord) {
         if (!chord_was_down)
@@ -163,7 +204,7 @@ int rewind_filter_pad(int index, pad_state_t* st) {
      * loops, so a chord key can replay as a lone SELECT one poll
      * later — most games treat that as QUIT. Keep swallowing. */
     if (system_ticks < cooldown_until) {
-        st->buttons &= (uint16_t)~CHORD;
+        st->buttons &= (uint16_t)~(CHORD | MENU_CHORD);
         return 0;
     }
 
