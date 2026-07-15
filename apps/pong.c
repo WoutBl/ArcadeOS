@@ -11,10 +11,42 @@
 
 #include "../sdk/arcade.h"
 #include "../libc/syscall.h"
+#include "../libc/string.h"
 
 /* Persistent high score: most points player 1 racked up in a session */
 #define SAVE_MAGIC 0xA2CADE03u
 typedef struct { unsigned int magic; int high; } save_t;
+
+/* ──────── Netplay (host-authoritative) ────────
+ * Client → host every frame: its pad. Host → client every frame: the
+ * whole (tiny) game state. On a LAN that is one frame of latency. */
+#define PONG_PORT 7777
+#define PI_MAGIC  0x50494E31u   /* 'PIN1' client input */
+#define PS_MAGIC  0x50535431u   /* 'PST1' host state */
+
+typedef struct {
+    unsigned int   magic;
+    short          ly;          /* Client analog Y */
+    unsigned short held;        /* Client buttons */
+    unsigned char  bye, _pad;
+} np_input_t;
+
+typedef struct {
+    unsigned int  magic;
+    short         ball_x, ball_y;
+    short         left_y, right_y;
+    unsigned char score_l, score_r, paused, bye;
+} np_state_t;
+
+/* "Opponent left" card, then back to the launcher */
+static void np_farewell(arcade_t* a, const char* why) {
+    for (int i = 0; i < 120 && arcade_frame(a); i++) {
+        surf_clear(&a->screen, rgb(8, 10, 30));
+        surf_draw_text(&a->screen, a->w / 2 - (int)(strlen(why) * 12), a->h / 2 - 12,
+                       why, rgb(255, 220, 80), SURF_TRANSPARENT, 3);
+    }
+    exit(0);
+}
 
 static void draw_score(surface_t* s, int x, int score, uint32_t color) {
     char buf[4];
@@ -43,9 +75,22 @@ int main(void) {
     int paused = 0;
 
     /* Standard opener: pick the mode on the SDK player-select screen */
-    int mode = arcade_choose_players(&a, "PONG", 0);
+    int mode = arcade_choose_players(&a, "PONG", ARCADE_CHOOSE_NET);
     if (mode == ARCADE_MODE_QUIT) exit(0);
-    int two_player = (mode == ARCADE_MODE_2P);
+    int two_player = (mode != ARCADE_MODE_1P);
+
+    /* Online: find the opponent on the LAN first */
+    int      net_role = 0;      /* 0 local, 1 host, 2 client */
+    unsigned peer_ip  = 0;
+    if (mode == ARCADE_MODE_NET_HOST) {
+        if (arcade_net_host_wait(&a, PONG_PORT, "PONG", &peer_ip) != 0) exit(0);
+        net_role = 1;
+    } else if (mode == ARCADE_MODE_NET_JOIN) {
+        if (arcade_net_join_lan(&a, PONG_PORT, "PONG", &peer_ip) != 0) exit(0);
+        net_role = 2;
+    }
+    np_input_t net_in    = {0};     /* Host: the client's latest pad */
+    int        net_stale = 0;      /* Frames since the peer spoke */
 
     save_t sv;
     int high = 0, high_dirty = 0;
@@ -64,6 +109,15 @@ int main(void) {
     while (arcade_frame(&a)) {
         a.score = score_l;
         if (a.pressed & (PAD_BTN_SELECT | PAD_BTN_B)) {
+            if (net_role == 1) {
+                np_state_t st = {0};
+                st.magic = PS_MAGIC; st.bye = 1;
+                arcade_net_send(peer_ip, PONG_PORT, &st, sizeof(st));
+            } else if (net_role == 2) {
+                np_input_t in = {0};
+                in.magic = PI_MAGIC; in.bye = 1;
+                arcade_net_send(peer_ip, PONG_PORT, &in, sizeof(in));
+            }
             if (high_dirty) {
                 sv.magic = SAVE_MAGIC;
                 sv.high  = high;
@@ -74,7 +128,49 @@ int main(void) {
         if (a.pressed & PAD_BTN_START)
             paused = !paused;
 
-        if (!paused) {
+        /* ──────── Netplay I/O ──────── */
+        if (net_role == 1) {
+            /* Drain the client's inputs, keep the newest */
+            np_input_t in;
+            int got = 0;
+            while (arcade_net_recv(&in, sizeof(in), 0, 0) >= (int)sizeof(in)) {
+                if (in.magic != PI_MAGIC) continue;
+                if (in.bye) np_farewell(&a, "OPPONENT LEFT");
+                net_in = in;
+                got = 1;
+            }
+            net_stale = got ? 0 : net_stale + 1;
+            if (net_stale > 300) np_farewell(&a, "CONNECTION LOST");
+        } else if (net_role == 2) {
+            /* Send our pad, apply the host's newest state */
+            np_input_t in = {0};
+            in.magic = PI_MAGIC;
+            in.ly    = a.pad.ly;
+            in.held  = a.held;
+            arcade_net_send(peer_ip, PONG_PORT, &in, sizeof(in));
+
+            np_state_t st;
+            int got = 0;
+            while (arcade_net_recv(&st, sizeof(st), 0, 0) >= (int)sizeof(st)) {
+                if (st.magic != PS_MAGIC) continue;
+                if (st.bye) np_farewell(&a, "HOST LEFT");
+                ball.x  = FX(st.ball_x);
+                ball.y  = FX(st.ball_y);
+                left_y  = st.left_y;
+                right_y = st.right_y;
+                if (st.score_r > score_r) sfx_score();
+                if (st.score_l > score_l) sound(180, 250);
+                score_l = st.score_l;
+                score_r = st.score_r;
+                paused  = st.paused;
+                got = 1;
+            }
+            net_stale = got ? 0 : net_stale + 1;
+            if (net_stale > 300) np_farewell(&a, "CONNECTION LOST");
+            a.score = score_r;              /* The client IS the right side */
+        }
+
+        if (!paused && net_role != 2) {
             /* Player paddle: D-pad or analog stick */
             if (a.held & PAD_BTN_UP)    left_y -= paddle_speed;
             if (a.held & PAD_BTN_DOWN)  left_y += paddle_speed;
@@ -83,7 +179,13 @@ int main(void) {
             if (left_y < 0) left_y = 0;
             if (left_y > H - paddle_h) left_y = H - paddle_h;
 
-            if (two_player) {
+            if (net_role == 1) {
+                /* Online: the challenger's pad drives the right paddle */
+                if (net_in.held & PAD_BTN_UP)   right_y -= paddle_speed;
+                if (net_in.held & PAD_BTN_DOWN) right_y += paddle_speed;
+                if (net_in.ly < -8000) right_y -= paddle_speed;
+                if (net_in.ly >  8000) right_y += paddle_speed;
+            } else if (two_player) {
                 /* Player 2 paddle: pad 1 (W/S on the keyboard) */
                 if (a.held2 & PAD_BTN_UP)    right_y -= paddle_speed;
                 if (a.held2 & PAD_BTN_DOWN)  right_y += paddle_speed;
@@ -138,6 +240,20 @@ int main(void) {
             if (bx > W)           { score_l++; if (score_l > high) { high = score_l; high_dirty = 1; } sound(700, 150); ball.x = FX(W/2); ball.y = FX(H/2); ball.vx = -FX(4); ball.vy = (fx_t)(arcade_rand() % 512) - 256; }
         }
 
+        if (net_role == 1) {
+            np_state_t st;
+            st.magic   = PS_MAGIC;
+            st.ball_x  = (short)FX_INT(ball.x);
+            st.ball_y  = (short)FX_INT(ball.y);
+            st.left_y  = (short)left_y;
+            st.right_y = (short)right_y;
+            st.score_l = (unsigned char)(score_l > 255 ? 255 : score_l);
+            st.score_r = (unsigned char)(score_r > 255 ? 255 : score_r);
+            st.paused  = (unsigned char)paused;
+            st.bye     = 0;
+            arcade_net_send(peer_ip, PONG_PORT, &st, sizeof(st));
+        }
+
         /* ──────── Render ──────── */
         surf_clear(&a.screen, rgb(6, 6, 18));
 
@@ -166,8 +282,12 @@ int main(void) {
             hb[n] = '\0';
             surf_draw_text(&a.screen, 16, 16, hb, rgb(255, 220, 80), SURF_TRANSPARENT, 1);
         }
-        surf_draw_text(&a.screen, W / 2 - 32, 76, two_player ? "2P MODE" : "VS CPU",
-                       two_player ? rgb(120, 255, 160) : rgb(90, 100, 150),
+        surf_draw_text(&a.screen, W / 2 - 32, 76,
+                       net_role == 1 ? "NET HOST" :
+                       net_role == 2 ? "NET AWAY" :
+                       two_player    ? "2P MODE"  : "VS CPU",
+                       net_role      ? rgb(255, 180, 255) :
+                       two_player    ? rgb(120, 255, 160) : rgb(90, 100, 150),
                        SURF_TRANSPARENT, 1);
         surf_draw_text(&a.screen, 16, H - 16,
                        "SELECT/B: QUIT  START: PAUSE  P2: W/S",

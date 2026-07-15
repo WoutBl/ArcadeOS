@@ -134,7 +134,7 @@ run: $(DISK)
 		-audiodev coreaudio,id=snd0 \
 		-device AC97,audiodev=snd0 \
 		-machine pcspk-audiodev=snd0 \
-		-netdev user,id=n0,hostfwd=tcp::8080-:80,hostfwd=udp::8007-:7 \
+		-netdev user,id=n0,hostfwd=tcp::8080-10.0.2.86:80,hostfwd=udp::8007-10.0.2.86:7 \
 		-device rtl8139,netdev=n0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \
@@ -153,7 +153,7 @@ run-ds4: $(DISK)
 		-audiodev coreaudio,id=snd0 \
 		-device AC97,audiodev=snd0 \
 		-machine pcspk-audiodev=snd0 \
-		-netdev user,id=n0,hostfwd=tcp::8080-:80,hostfwd=udp::8007-:7 \
+		-netdev user,id=n0,hostfwd=tcp::8080-10.0.2.86:80,hostfwd=udp::8007-10.0.2.86:7 \
 		-device rtl8139,netdev=n0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \
@@ -169,7 +169,7 @@ run-headless: $(DISK)
 		-audiodev wav,id=snd0,path=audio-out.wav \
 		-device AC97,audiodev=snd0 \
 		-machine pcspk-audiodev=snd0 \
-		-netdev user,id=n0,hostfwd=tcp::8080-:80,hostfwd=udp::8007-:7 \
+		-netdev user,id=n0,hostfwd=tcp::8080-10.0.2.86:80,hostfwd=udp::8007-10.0.2.86:7 \
 		-device rtl8139,netdev=n0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \
@@ -188,7 +188,7 @@ run-xhci: $(DISK)
 		-audiodev wav,id=snd0,path=audio-out.wav \
 		-device AC97,audiodev=snd0 \
 		-machine pcspk-audiodev=snd0 \
-		-netdev user,id=n0,hostfwd=tcp::8080-:80,hostfwd=udp::8007-:7 \
+		-netdev user,id=n0,hostfwd=tcp::8080-10.0.2.86:80,hostfwd=udp::8007-10.0.2.86:7 \
 		-device rtl8139,netdev=n0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \

@@ -141,33 +141,30 @@ hardware is still on the list.
     back, game keeps running. v2 ideas: input-log replay between
     snapshots for frame-exact scrubbing, hold-to-rewind.
 
+18. **User profiles, scoreboard + player-select** (July 2026). The
+    launcher owns profiles now: USERS0.SAV, on-screen-keyboard name
+    entry, a two-stage P1/P2 picker pushing the session to the kernel
+    (restored on boot, shown to games and /api/status); X opens the
+    central HIGH SCORES screen (kernel-tracked HISCORE0.SAV); and the
+    SDK grew arcade_choose_players(), the standard 1P/2P(/net) opener
+    Pong now uses instead of its hidden Y toggle.
+
+19. **Networked multiplayer** (July 2026). Consoles derive their IP
+    from the NIC MAC (10.0.2.<mac[5]>), the stack sends/accepts UDP
+    broadcasts, and the SDK provides LAN discovery + handshake
+    (arcade_net_host_wait / arcade_net_join_lan — FIND/HERE/JOIN/ACPT
+    on the game port). Pong is fully host-authoritative online: the
+    joiner streams its pad, the host simulates and streams state, and
+    either side leaving pops a farewell card on the other. Verified
+    with two QEMU instances on a socket-netdev wire (10.0.2.10 vs
+    .11): discovery, paddle control, scoring, and quit propagation.
+
 ## Up next
-
-- **User profiles.** Persistent usernames on the game volume, multiple
-  players, pick Player 1 (and Player 2 for 2P games) in the launcher;
-  the active session is visible to games and the REST API.
-
-- **Central highscore board.** The kernel already sees every game's
-  live score (SYS_SCORE); track the best per (game, player), persist
-  it, and show a scoreboard screen in the launcher.
-
-- **Player-select screen.** 2-player games open with a standard
-  1P-vs-CPU / 2P chooser (SDK-provided, shows the session usernames)
-  instead of a hidden toggle.
 
 - **Kernel system menu (universal pause).** SELECT+START in any game
   freezes it and opens a kernel-drawn overlay: continue, a LIST of the
   rewind save-states with their ages (pick one to restore), and quit
   to menu. Zero game cooperation, like the rewind itself.
-
-- **REST API: device identity.** /api/status should report MAC, IP,
-  software version, serial number, product/model name, and play
-  status (menu vs. which game, and who is playing).
-
-- **Networked multiplayer in a game.** The transport exists (UDP
-  sockets); wire it into Pong as host/join — client streams inputs,
-  host simulates and streams state. Needs per-console IPs (derive from
-  the NIC MAC) and UDP broadcast for discovery.
 
 ## Later
 

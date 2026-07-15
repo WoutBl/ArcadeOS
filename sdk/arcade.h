@@ -150,6 +150,16 @@ static inline int arcade_net_send(unsigned ip, int port,
     return net_op(&rq);
 }
 
+/* ──────── LAN discovery + handshake ────────
+ *
+ * The standard way for a game to find its opponent, matching the
+ * chooser's HOST/JOIN modes. Both consoles bind the same game port.
+ * The host answers discovery probes carrying its game tag; the
+ * joiner broadcasts probes, then requests a match with the first
+ * host that answers. Both run their own UI loop (like
+ * arcade_choose_players) and return 0 with *peer_ip set, or -1 when
+ * the player backs out (B) or the game should quit.
+ */
 /* Returns bytes received (or -1 when nothing is queued); fills
  * src_ip/src_port when non-NULL. */
 static inline int arcade_net_recv(void* buf, int maxlen,
@@ -251,6 +261,11 @@ int arcade_frame(arcade_t* a);
 #define ARCADE_CHOOSE_NET     0x1
 
 int arcade_choose_players(arcade_t* a, const char* title, unsigned flags);
+
+int arcade_net_host_wait(arcade_t* a, int port, const char* tag,
+                         unsigned* peer_ip);
+int arcade_net_join_lan(arcade_t* a, int port, const char* tag,
+                        unsigned* peer_ip);
 
 
 #endif /* ARCADE_H */

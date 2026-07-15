@@ -53,7 +53,7 @@ qemu-system-x86_64 -m 128 \
     -audiodev none,id=snd0 \
     -device AC97,audiodev=snd0 \
     -machine pcspk-audiodev=snd0 \
-    -netdev user,id=n0,hostfwd=tcp::8080-:80,hostfwd=udp::8007-:7 \
+    -netdev user,id=n0,hostfwd=tcp::8080-10.0.2.86:80,hostfwd=udp::8007-10.0.2.86:7 \
     -device rtl8139,netdev=n0 \
     -drive file=$IMG,format=raw,if=none,id=gamedisk \
     -device ahci,id=ahci0 \

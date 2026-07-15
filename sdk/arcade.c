@@ -260,3 +260,143 @@ int arcade_choose_players(arcade_t* a, const char* title, unsigned flags) {
     }
     return ARCADE_MODE_QUIT;
 }
+
+/* ──────── LAN discovery + handshake (see arcade.h) ──────── */
+
+/* Discovery datagrams: 4-byte magic + kind + the game's tag */
+#define NP_MAGIC 0x4E504C31u    /* 'NPL1' */
+#define NP_FIND  1              /* Joiner broadcast: anyone hosting <tag>? */
+#define NP_HERE  2              /* Host reply: yes, here */
+#define NP_JOIN  3              /* Joiner: match me */
+#define NP_ACPT  4              /* Host: game on */
+
+typedef struct {
+    uint32_t magic;
+    uint32_t kind;
+    char     tag[8];
+} np_disc_t;
+
+static void np_fill(np_disc_t* d, uint32_t kind, const char* tag) {
+    d->magic = NP_MAGIC;
+    d->kind  = kind;
+    for (int i = 0; i < 8; i++) d->tag[i] = 0;
+    for (int i = 0; i < 7 && tag[i]; i++) d->tag[i] = tag[i];
+}
+
+static int np_tag_ok(const np_disc_t* d, const char* tag) {
+    if (d->magic != NP_MAGIC) return 0;
+    for (int i = 0; i < 7; i++) {
+        if (d->tag[i] != (tag[i] ? tag[i] : 0)) return 0;
+        if (!tag[i]) break;
+    }
+    return 1;
+}
+
+static void np_draw_screen(arcade_t* a, const char* title, const char* line1,
+                           const char* line2) {
+    surface_t* s = &a->screen;
+    surf_clear(s, rgb(8, 10, 30));
+    surf_draw_text(s, a->w / 2 - (int)strlen(title) * 12, 70, title,
+                   rgb(255, 255, 255), SURF_TRANSPARENT, 3);
+    surf_draw_text(s, a->w / 2 - (int)strlen(line1) * 8, 170, line1,
+                   rgb(120, 200, 255), SURF_TRANSPARENT, 2);
+    if (line2)
+        surf_draw_text(s, a->w / 2 - (int)strlen(line2) * 8, 215, line2,
+                       rgb(150, 160, 200), SURF_TRANSPARENT, 2);
+    /* Animated dots so the screen visibly isn't frozen */
+    int dots = (int)((a->frame / 20) % 4);
+    for (int i = 0; i < dots; i++)
+        surf_fill_rect(s, a->w / 2 - 30 + i * 20, 260, 10, 10, rgb(255, 220, 80));
+    surf_draw_text(s, a->w / 2 - 100, a->h - 28, "B(Z): CANCEL",
+                   rgb(120, 140, 220), SURF_TRANSPARENT, 1);
+}
+
+static void np_ip_str(unsigned ip, char* out) {
+    int p = 0;
+    for (int i = 3; i >= 0; i--) {
+        unsigned o = (ip >> (i * 8)) & 0xFF;
+        if (o >= 100) out[p++] = (char)('0' + o / 100);
+        if (o >= 10)  out[p++] = (char)('0' + (o / 10) % 10);
+        out[p++] = (char)('0' + o % 10);
+        if (i) out[p++] = '.';
+    }
+    out[p] = '\0';
+}
+
+int arcade_net_host_wait(arcade_t* a, int port, const char* tag,
+                         unsigned* peer_ip) {
+    if (arcade_net_bind(port) != 0) return -1;
+
+    char line1[40] = "YOUR IP: ";
+    np_ip_str(arcade_net_local_ip(), line1 + 9);
+
+    while (arcade_frame(a)) {
+        if (a->pressed & (PAD_BTN_B | PAD_BTN_SELECT)) return -1;
+
+        np_disc_t d;
+        unsigned  sip;
+        int       sport;
+        while (arcade_net_recv(&d, sizeof(d), &sip, &sport) >= (int)sizeof(d)) {
+            if (!np_tag_ok(&d, tag)) continue;
+            if (d.kind == NP_FIND) {
+                np_disc_t r;
+                np_fill(&r, NP_HERE, tag);
+                arcade_net_send(sip, sport, &r, sizeof(r));
+            } else if (d.kind == NP_JOIN) {
+                np_disc_t r;
+                np_fill(&r, NP_ACPT, tag);
+                arcade_net_send(sip, sport, &r, sizeof(r));
+                *peer_ip = sip;
+                return 0;
+            }
+        }
+
+        np_draw_screen(a, "HOSTING", line1, "WAITING FOR A CHALLENGER");
+    }
+    return -1;
+}
+
+int arcade_net_join_lan(arcade_t* a, int port, const char* tag,
+                        unsigned* peer_ip) {
+    if (arcade_net_bind(port) != 0) return -1;
+
+    unsigned host_ip = 0;
+
+    while (arcade_frame(a)) {
+        if (a->pressed & (PAD_BTN_B | PAD_BTN_SELECT)) return -1;
+
+        /* Probe twice a second: broadcast while searching, then JOIN
+         * the host that answered (also reannounces if a packet drops) */
+        if (a->frame % 30 == 0) {
+            np_disc_t d;
+            if (host_ip == 0) {
+                np_fill(&d, NP_FIND, tag);
+                arcade_net_send(0xFFFFFFFFu, port, &d, sizeof(d));
+            } else {
+                np_fill(&d, NP_JOIN, tag);
+                arcade_net_send(host_ip, port, &d, sizeof(d));
+            }
+        }
+
+        np_disc_t d;
+        unsigned  sip;
+        int       sport;
+        while (arcade_net_recv(&d, sizeof(d), &sip, &sport) >= (int)sizeof(d)) {
+            if (!np_tag_ok(&d, tag)) continue;
+            if (d.kind == NP_HERE && host_ip == 0) {
+                host_ip = sip;
+                np_disc_t j;
+                np_fill(&j, NP_JOIN, tag);
+                arcade_net_send(host_ip, port, &j, sizeof(j));
+            } else if (d.kind == NP_ACPT) {
+                *peer_ip = sip;
+                return 0;
+            }
+        }
+
+        np_draw_screen(a, "JOINING",
+                       host_ip ? "HOST FOUND - CONNECTING" : "SEARCHING THE LAN",
+                       0);
+    }
+    return -1;
+}

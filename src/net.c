@@ -40,7 +40,10 @@ static const char* strstr_simple(const char* hay, const char* needle) {
 }
 
 /* Our static identity (QEMU slirp defaults) */
-static const uint8_t our_ip[4] = { 10, 0, 2, 15 };
+/* Per-console IP, derived from the NIC MAC in net_init() so two
+ * consoles on one LAN don't clash: 10.0.2.<mac[5]> (reserved slirp
+ * octets remapped). The default QEMU MAC ...:34:56 gives 10.0.2.86. */
+static uint8_t our_ip[4] = { 10, 0, 2, 86 };
 
 #define ETH_ARP  0x0806
 #define ETH_IP   0x0800
@@ -756,6 +759,14 @@ int net_udp_send(uint32_t dst_ip, uint16_t dst_port,
         (uint8_t)(dst_ip >> 24), (uint8_t)(dst_ip >> 16),
         (uint8_t)(dst_ip >> 8),  (uint8_t)dst_ip,
     };
+
+    /* 255.255.255.255: LAN discovery — broadcast MAC, no ARP */
+    if (dst_ip == 0xFFFFFFFFu) {
+        static const uint8_t bcast_mac[6] = { 255, 255, 255, 255, 255, 255 };
+        udp_tx(bcast_mac, ip, udp_port, dst_port, buf, len);
+        return 0;
+    }
+
     const uint8_t* mac = arp_find(ip);
     if (!mac) {
         arp_request(ip);        /* Resolve in the background */
@@ -790,9 +801,18 @@ void net_init(void) {
         return;
     }
     conn.state = TCP_LISTEN;
+
+    /* Last octet from the MAC; dodge slirp's reserved addresses
+     * (.0 net, .1, .2 gateway, .3 DNS, .255 bcast) */
+    uint8_t last = rtl8139_mac()[5];
+    if (last <= 3 || last == 255) last = (uint8_t)(200 + (last & 0x0F));
+    our_ip[3] = last;
+
     net_up = 1;
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    terminal_writestring("[NET] IP 10.0.2.15, REST API on port 80\n");
+    terminal_writestring("[NET] IP 10.0.2.");
+    terminal_writedec(our_ip[3]);
+    terminal_writestring(" (from MAC), REST API on port 80\n");
 }
 
 void net_poll(void) {
@@ -811,7 +831,10 @@ void net_poll(void) {
         } else if (type == ETH_IP && len >= sizeof(eth_hdr_t) + 20) {
             const ip_hdr_t* ip = (const ip_hdr_t*)(frame_in + sizeof(eth_hdr_t));
             if ((ip->ver_ihl >> 4) != 4) continue;
-            if (memcmp(ip->dst, our_ip, 4) != 0) continue;
+            static const uint8_t bcast[4] = { 255, 255, 255, 255 };
+            int to_us    = memcmp(ip->dst, our_ip, 4) == 0;
+            int to_bcast = memcmp(ip->dst, bcast, 4) == 0;
+            if (!to_us && !to_bcast) continue;
 
             uint32_t ihl = (uint32_t)(ip->ver_ihl & 0xF) * 4;
             uint32_t tot = htons16(ip->total_len);
@@ -820,9 +843,11 @@ void net_poll(void) {
             const uint8_t* payload = frame_in + sizeof(eth_hdr_t) + ihl;
             uint32_t plen = tot - ihl;
 
-            if (ip->proto == IP_ICMP)     handle_icmp(eth, ip, payload, plen);
-            else if (ip->proto == IP_TCP) handle_tcp(eth, ip, payload, plen);
-            else if (ip->proto == IP_UDP) handle_udp(eth, ip, payload, plen);
+            /* Broadcasts are only meaningful for UDP (LAN discovery) */
+            if (ip->proto == IP_UDP)           handle_udp(eth, ip, payload, plen);
+            else if (!to_us)                   continue;
+            else if (ip->proto == IP_ICMP)     handle_icmp(eth, ip, payload, plen);
+            else if (ip->proto == IP_TCP)      handle_tcp(eth, ip, payload, plen);
         }
     }
 }
