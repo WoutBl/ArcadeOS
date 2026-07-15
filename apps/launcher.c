@@ -45,8 +45,38 @@ typedef struct {
 static users_t users;
 
 /* Which screen the launcher is on */
-enum { SCR_HOME, SCR_USERS, SCR_NAME };
+enum { SCR_HOME, SCR_USERS, SCR_NAME, SCR_SCORES };
 static int screen = SCR_HOME;
+
+/* ──────── Central highscores (written by the kernel) ──────── */
+
+static hiscore_file_t board;
+static int board_ok = 0;
+
+/* The kernel owns the live board and flushes it to HISCORE0.SAV from
+ * the idle task (~2 s throttle), so reading the file on screen entry
+ * is at most a couple of seconds behind the last game. */
+static void board_load(void) {
+    hiscore_file_t tmp;
+    board_ok = 0;
+    board.count = 0;
+    if (arcade_load("HISCORE", 0, &tmp, sizeof(tmp)) < (int)(2 * sizeof(uint32_t)))
+        return;
+    if (tmp.magic != HISCORE_MAGIC || tmp.count > HISCORE_MAX)
+        return;
+    board = tmp;
+    /* Sort by score, best first (tiny N: insertion sort) */
+    for (uint32_t i = 1; i < board.count; i++) {
+        hiscore_entry_t key = board.e[i];
+        int j = (int)i - 1;
+        while (j >= 0 && board.e[j].score < key.score) {
+            board.e[j + 1] = board.e[j];
+            j--;
+        }
+        board.e[j + 1] = key;
+    }
+    board_ok = 1;
+}
 
 static void users_load(void) {
     users_t tmp;
@@ -193,8 +223,61 @@ static void draw_home(surface_t* s, int selected, int last_idx, unsigned int t) 
     /* Footer */
     surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(18, 22, 60));
     surf_draw_text(s, 24, s->h - 24,
-                   "A(X): PLAY   Y(V): PLAYERS",
+                   "A(X): PLAY   Y(V): PLAYERS   X(C): SCORES",
                    rgb(120, 140, 220), SURF_TRANSPARENT, 1);
+}
+
+/* ──────── Scoreboard screen ──────── */
+
+static void draw_scores(surface_t* s) {
+    surf_clear(s, rgb(10, 12, 34));
+    surf_fill_rect(s, 0, 0, s->w, 64, rgb(18, 40, 40));
+    surf_fill_rect(s, 0, 64, s->w, 3, rgb(80, 220, 160));
+    surf_draw_text(s, 24, 20, "HIGH SCORES", rgb(255, 255, 255), SURF_TRANSPARENT, 3);
+
+    if (!board_ok || board.count == 0) {
+        surf_draw_text(s, 40, 110, "NO SCORES YET - GO PLAY!",
+                       rgb(120, 220, 160), SURF_TRANSPARENT, 2);
+    } else {
+        /* Column headers */
+        surf_draw_text(s, 64, 84,  "GAME",   rgb(90, 140, 120), SURF_TRANSPARENT, 1);
+        surf_draw_text(s, 260, 84, "PLAYER", rgb(90, 140, 120), SURF_TRANSPARENT, 1);
+        surf_draw_text(s, s->w - 140, 84, "SCORE", rgb(90, 140, 120), SURF_TRANSPARENT, 1);
+
+        int y = 104;
+        uint32_t rows = board.count;
+        uint32_t max_rows = (uint32_t)((s->h - 150) / 30);
+        if (rows > max_rows) rows = max_rows;
+        for (uint32_t i = 0; i < rows; i++) {
+            uint32_t fg = (i == 0) ? rgb(255, 220, 80)
+                        : (i == 1) ? rgb(210, 210, 220)
+                        : (i == 2) ? rgb(220, 160, 110)
+                        : rgb(150, 170, 190);
+            char rank[8];
+            fmt_u(rank, i + 1);
+            surf_draw_text(s, 32, y, rank, fg, SURF_TRANSPARENT, 2);
+
+            char game[13], user[SESSION_NAME_LEN];
+            /* NUL-pad guards: the file comes off disk */
+            for (int k = 0; k < 12; k++) game[k] = board.e[i].game[k];
+            game[12] = '\0';
+            for (int k = 0; k < SESSION_NAME_LEN; k++) user[k] = board.e[i].user[k];
+            user[SESSION_NAME_LEN - 1] = '\0';
+
+            surf_draw_text(s, 64, y, game, fg, SURF_TRANSPARENT, 2);
+            surf_draw_text(s, 260, y, user, fg, SURF_TRANSPARENT, 2);
+
+            char sc[16];
+            int32_t v = board.e[i].score;
+            fmt_u(sc, v < 0 ? 0u : (unsigned)v);
+            surf_draw_text(s, s->w - 140, y, sc, fg, SURF_TRANSPARENT, 2);
+            y += 30;
+        }
+    }
+
+    surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(18, 40, 40));
+    surf_draw_text(s, 24, s->h - 24, "B(Z): BACK",
+                   rgb(110, 190, 150), SURF_TRANSPARENT, 1);
 }
 
 /* ──────── Player-picker screen ──────── */
@@ -383,6 +466,11 @@ int main(void) {
                 pick_sel = (users.p1 >= 0) ? users.p1 : 0;
                 pending_p1 = users.p1;
             }
+            if (a.pressed & PAD_BTN_X) {
+                sfx_select();
+                board_load();
+                screen = SCR_SCORES;
+            }
 
             if ((a.pressed & (PAD_BTN_A | PAD_BTN_START)) && num_games > 0) {
                 sfx_select();
@@ -451,6 +539,14 @@ int main(void) {
                 }
             }
             draw_users(&a.screen);
+        }
+
+        else if (screen == SCR_SCORES) {
+            if (a.pressed & (PAD_BTN_B | PAD_BTN_START | PAD_BTN_X)) {
+                sfx_move();
+                screen = SCR_HOME;
+            }
+            draw_scores(&a.screen);
         }
 
         else { /* SCR_NAME */
