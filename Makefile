@@ -41,7 +41,7 @@ STAGE2 = $(BUILD)/stage2.bin
 # Kernel source files
 C_SOURCES = src/kernel.c src/vga.c src/serial.c src/fb.c src/console_gfx.c \
             src/keyboard.c src/gamepad.c src/pci.c src/usb.c src/uhci.c src/xhci.c \
-            src/ata.c src/ahci.c src/disk.c src/klog.c src/audio.c src/ac97.c src/pcspk.c src/net.c src/rtl8139.c src/fat32.c src/fs.c src/clock.c src/heap.c src/idt.c \
+            src/ata.c src/ahci.c src/disk.c src/klog.c src/audio.c src/ac97.c src/hda.c src/pcspk.c src/net.c src/rtl8139.c src/fat32.c src/fs.c src/clock.c src/heap.c src/idt.c \
             src/string.c src/pmm.c src/paging.c src/task.c src/scheduler.c \
             src/syscall.c src/sysmenu.c src/loader.c src/elf.c src/vfs.c src/devfs.c src/pipe.c src/rewind.c src/session.c
 
@@ -170,6 +170,23 @@ run-headless: $(DISK)
 		-device AC97,audiodev=snd0 \
 		-machine pcspk-audiodev=snd0 \
 		-netdev user,id=n0,hostfwd=tcp::8080-10.0.2.15:80,hostfwd=udp::8007-10.0.2.15:7 \
+		-device rtl8139,netdev=n0 \
+		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
+		-device ahci,id=ahci0 \
+		-device ide-hd,drive=gamedisk,bus=ahci0.0 \
+		-boot c -usb \
+		-serial file:serial.log \
+		-display none \
+		-monitor unix:qemu-monitor.sock,server,nowait \
+		-no-reboot
+
+# Intel HDA test: headless boot with intel-hda instead of AC97 — the
+# boot chime landing in audio-out.wav proves the HDA stream end to end
+run-hda: $(DISK)
+	qemu-system-x86_64 -m 128 \
+		-audiodev wav,id=snd0,path=audio-out.wav \
+		-device intel-hda -device hda-output,audiodev=snd0 \
+		-netdev user,id=n0,hostfwd=tcp::8080-10.0.2.15:80 \
 		-device rtl8139,netdev=n0 \
 		-drive file=$(DISK),format=raw,if=none,id=gamedisk \
 		-device ahci,id=ahci0 \

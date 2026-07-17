@@ -44,10 +44,16 @@ static inline void irq_restore(uint64_t f) {
 }
 
 void audio_init(void) {
-    if (!ac97_init()) {
+    /* Prefer HDA (real hardware), then AC97 (QEMU default), then beeper */
+    if (!hda_init() && !ac97_init()) {
         terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
-        terminal_writestring("[AUDIO] No AC97 codec - PC speaker fallback\n");
+        terminal_writestring("[AUDIO] No HDA/AC97 codec - PC speaker fallback\n");
     }
+}
+
+/* Any PCM-capable backend up? (The mixer needs one to be heard.) */
+static int pcm_backend(void) {
+    return hda_is_present() || ac97_is_present();
 }
 
 /* ──────── Voice control ──────── */
@@ -117,7 +123,7 @@ void audio_tone(uint32_t freq_hz, uint32_t ms) {
         pcspk_stop();
         return;
     }
-    if (ac97_is_present())
+    if (pcm_backend())
         audio_tone_voice(0, freq_hz, ms, 255);
     else
         pcspk_tone(freq_hz, ms);
@@ -163,7 +169,7 @@ void mixer_render(int16_t* out, uint32_t frames) {
 static int16_t chime_buf[CHIME_LEN];
 
 void audio_boot_chime(void) {
-    if (!ac97_is_present()) return;
+    if (!pcm_backend()) return;
 
     for (uint32_t i = 0; i < CHIME_LEN; i++) {
         /* Two notes: A5 (880 Hz) then E6 (1319 Hz) */
@@ -184,4 +190,5 @@ void audio_boot_chime(void) {
 void audio_tick(void) {
     pcspk_tick();
     ac97_tick();
+    hda_tick();
 }

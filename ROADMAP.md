@@ -203,10 +203,19 @@ hardware is still on the list.
     netplay case keeps working unchanged). Real LANs no longer need
     to look like slirp.
 
-## Later
+24. **Intel HDA audio backend** (July 2026). `src/hda.c`: controller
+    bring-up (reset, CORB/RIRB command rings with the RIRBSTS-ack
+    protocol real drivers use), generic codec discovery (walk the
+    function groups for the first DAC + output pin — no hardcoded
+    NIDs, so real codecs should enumerate too), and a 48 kHz output
+    stream on a cyclic 32-page BDL fed by the same mixer_render
+    lookahead as AC97. audio_init prefers HDA, falls back to AC97,
+    then the PC speaker. `make run-hda` boots with QEMU's intel-hda:
+    boot chime + menu blips verified in the WAV capture. With xHCI,
+    VBE fallback, AHCI and DHCP done, the console now speaks every
+    real-hardware dialect it needs.
 
-- **Intel HDA audio backend.** AC97 covers QEMU; real hardware
-  increasingly exposes HDA only.
+## Later
 
 - **Visual level editor.** The dev tool covers code + sprites; a
   drag-and-drop level/tilemap editor exporting C data would complete

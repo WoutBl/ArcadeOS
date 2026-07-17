@@ -59,4 +59,9 @@ int  ac97_init(void);
 int  ac97_is_present(void);
 void ac97_tick(void);
 
+/* Intel HDA transport (hda.c): same model, what real hardware has */
+int  hda_init(void);
+int  hda_is_present(void);
+void hda_tick(void);
+
 #endif /* AUDIO_H */
