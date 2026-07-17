@@ -193,7 +193,22 @@ static int fat32_iterate_dir(uint32_t dir_cluster, dirent_visitor_t visit, void*
 
 /* ──────── VFS operations ──────── */
 
-static int32_t fat32_vfs_read(vfs_node_t* node, uint32_t offset, uint32_t size, uint8_t* buf) {
+/*
+ * Concurrency guard (see fat32_busy below): EVERY public entry into
+ * the driver must hold the depth counter, because the whole driver
+ * works through shared static buffers (sector_buf, fat_cache). The
+ * idle-task flushers (kernel log, highscores) check fat32_busy()
+ * before writing — if a PREEMPTED operation is mid-flight (e.g. exec()
+ * streaming a game ELF off the volume), starting a save would clobber
+ * those buffers and corrupt the read. This bit exec() for real: games
+ * intermittently loaded with garbage bytes whenever the klog flush
+ * fired during their FAT32 read.
+ */
+static int fat32_op_depth = 0;
+
+int fat32_busy(void) { return fat32_op_depth != 0; }
+
+static int32_t fat32_read_impl(vfs_node_t* node, uint32_t offset, uint32_t size, uint8_t* buf) {
     if (!node || !buf) return -1;
     if (offset >= node->length) return 0;
     if (offset + size > node->length) size = node->length - offset;
@@ -232,6 +247,13 @@ static int32_t fat32_vfs_read(vfs_node_t* node, uint32_t offset, uint32_t size, 
     return (int32_t)copied;
 }
 
+static int32_t fat32_vfs_read(vfs_node_t* node, uint32_t offset, uint32_t size, uint8_t* buf) {
+    fat32_op_depth++;
+    int32_t r = fat32_read_impl(node, offset, size, buf);
+    fat32_op_depth--;
+    return r;
+}
+
 static vfs_node_t* fat32_make_node(const fat32_dirent_t* de);
 
 /* finddir visitor */
@@ -252,8 +274,10 @@ static int finddir_visitor(const fat32_dirent_t* de, void* ctx) {
 static vfs_node_t* fat32_vfs_finddir(vfs_node_t* node, const char* name) {
     if (!node || !name) return (vfs_node_t*)0;
 
+    fat32_op_depth++;
     finddir_ctx_t ctx = { name, (vfs_node_t*)0 };
     fat32_iterate_dir(node->inode, finddir_visitor, &ctx);
+    fat32_op_depth--;
     return ctx.result;
 }
 
@@ -280,8 +304,10 @@ static int readdir_visitor(const fat32_dirent_t* de, void* ctx) {
 static vfs_dirent_t* fat32_vfs_readdir(vfs_node_t* node, uint32_t index) {
     if (!node) return (vfs_dirent_t*)0;
 
+    fat32_op_depth++;
     readdir_ctx_t ctx = { index, 0, (vfs_dirent_t*)0 };
     fat32_iterate_dir(node->inode, readdir_visitor, &ctx);
+    fat32_op_depth--;
     return ctx.result;
 }
 
@@ -582,18 +608,6 @@ static int fat32_load_impl(const char* name, uint8_t* out, uint32_t maxlen) {
     tmp.length = loc.de.size;
     return fat32_vfs_read(&tmp, 0, size, out);
 }
-
-/*
- * ──────── Concurrency guard ────────
- *
- * fat32_busy() lets the kernel log flusher (which runs from the idle
- * task) avoid interleaving its whole-file write with a game's SYS_SAVE /
- * SYS_LOAD that was preempted mid-operation. Single CPU: the counter is
- * only ever observed under cli(), so a plain int is enough.
- */
-static int fat32_op_depth = 0;
-
-int fat32_busy(void) { return fat32_op_depth != 0; }
 
 int fat32_save(const char* name, const uint8_t* data, uint32_t len) {
     fat32_op_depth++;
