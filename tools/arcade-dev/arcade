@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""
+arcade — the ArcadeOS PC-side dev tool.
+
+Build games for the console on a normal PC, then put them on the game
+volume the console boots from. The console picks up any *.ELF in the
+FAT32 root, so "shipping" a game is just deploying the volume image.
+
+  arcade new NAME [DIR]   scaffold a game project from the SDK template
+  arcade build [DIR]      compile DIR (default .) -> NAME.ELF
+  arcade deploy [DIR]     build + bake the game into arcadeos.img
+  arcade run [DIR]        deploy + boot QEMU with the volume
+  arcade sprites          open the pixel-art sprite editor (browser)
+
+The tool lives inside the ArcadeOS repo and uses its cross toolchain
+(x86_64-elf-gcc) and SDK (build/libarcade.a). NOTE: a plain `make`
+regenerates arcadeos.img WITHOUT deployed games — rerun `arcade
+deploy` after kernel rebuilds (same rule as save data).
+"""
+
+import os
+import subprocess
+import sys
+import webbrowser
+
+TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT     = os.path.dirname(os.path.dirname(TOOL_DIR))   # repo root
+
+NOFPU = ["-mno-red-zone", "-mno-mmx", "-mno-sse", "-mno-sse2", "-msoft-float"]
+APP_LDFLAGS = "-Wl,-Ttext=0x401000,--build-id=none,-e,main,-z,max-page-size=0x1000"
+
+
+def die(msg):
+    print(f"arcade: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def sh(args, **kw):
+    r = subprocess.run(args, **kw)
+    if r.returncode != 0:
+        die(f"command failed: {' '.join(str(a) for a in args)}")
+
+
+def game_name(d):
+    """8.3-safe game name from the project directory."""
+    name = os.path.basename(os.path.abspath(d)).upper()
+    name = "".join(c for c in name if c.isalnum())[:8]
+    if not name:
+        die("cannot derive a game name from this directory")
+    return name
+
+
+def cmd_new(argv):
+    if not argv:
+        die("usage: arcade new NAME [DIR]")
+    name = argv[0]
+    dest = argv[1] if len(argv) > 1 else name.lower()
+    if os.path.exists(dest):
+        die(f"{dest} already exists")
+    os.makedirs(dest)
+
+    tpl = os.path.join(TOOL_DIR, "templates")
+    for fn in ("main.c", "sprites.h"):
+        with open(os.path.join(tpl, fn)) as f:
+            src = f.read()
+        src = src.replace("@NAME@", game_name(dest)) \
+                 .replace("@TITLE@", name.upper())
+        with open(os.path.join(dest, fn), "w") as f:
+            f.write(src)
+
+    print(f"created {dest}/ — next steps:")
+    print(f"  ../{os.path.relpath(TOOL_DIR)}/arcade run {dest}")
+    print(f"  edit {dest}/main.c, paint sprites with `arcade sprites`")
+
+
+def ensure_sdk():
+    lib = os.path.join(ROOT, "build", "libarcade.a")
+    sh(["make", "-C", ROOT, "build/libarcade.a"],
+       stdout=subprocess.DEVNULL)
+    return lib
+
+
+def cmd_build(argv):
+    d = argv[0] if argv else "."
+    main_c = os.path.join(d, "main.c")
+    if not os.path.isfile(main_c):
+        die(f"no main.c in {d} (run `arcade new` first?)")
+    lib  = ensure_sdk()
+    name = game_name(d)
+    out  = os.path.join(d, f"{name}.ELF")
+    sh(["x86_64-elf-gcc", "-Os", "-s", "-ffreestanding", "-nostdlib",
+        "-fno-builtin", *NOFPU,
+        "-I", os.path.join(ROOT, "sdk"),
+        "-I", os.path.join(ROOT, "libc"),
+        main_c, lib, "-o", out, APP_LDFLAGS])
+    print(f"built {out}")
+    return out
+
+
+def cmd_deploy(argv):
+    elf = cmd_build(argv)
+    # Full console build, then bake the volume with our game added
+    sh(["make", "-C", ROOT], stdout=subprocess.DEVNULL)
+    std_apps = [os.path.join(ROOT, "build", f"{g}.elf")
+                for g in ("launcher", "pong", "snake", "breakout",
+                          "starcatch", "blaster")]
+    sh(["python3", os.path.join(ROOT, "tools", "mkfat32.py"),
+        os.path.join(ROOT, "arcadeos.img"), "64",
+        os.path.join(ROOT, "build", "stage1.bin"),
+        os.path.join(ROOT, "build", "stage2.bin"),
+        os.path.join(ROOT, "arcadeos.bin"),
+        *std_apps, elf])
+    print(f"deployed {os.path.basename(elf)} onto arcadeos.img")
+
+
+def cmd_run(argv):
+    cmd_deploy(argv)
+    print("booting QEMU (close the window to stop)...")
+    sh(["qemu-system-x86_64", "-m", "128",
+        "-netdev", "user,id=n0,hostfwd=tcp::8080-10.0.2.86:80",
+        "-device", "rtl8139,netdev=n0",
+        "-drive", f"file={os.path.join(ROOT, 'arcadeos.img')},format=raw,if=none,id=gd",
+        "-device", "ahci,id=ah", "-device", "ide-hd,drive=gd,bus=ah.0",
+        "-boot", "c", "-usb",
+        "-display", "cocoa,zoom-to-fit=on" if sys.platform == "darwin" else "gtk",
+        "-no-reboot"])
+
+
+def cmd_sprites(argv):
+    page = os.path.join(TOOL_DIR, "sprite-editor.html")
+    print(f"opening {page}")
+    webbrowser.open("file://" + page)
+
+
+def main():
+    cmds = {"new": cmd_new, "build": cmd_build,
+            "deploy": cmd_deploy, "run": cmd_run, "sprites": cmd_sprites}
+    if len(sys.argv) < 2 or sys.argv[1] not in cmds:
+        print(__doc__.strip())
+        sys.exit(0 if len(sys.argv) < 2 else 1)
+    cmds[sys.argv[1]](sys.argv[2:])
+
+
+if __name__ == "__main__":
+    main()

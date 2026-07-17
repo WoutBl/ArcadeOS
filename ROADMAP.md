@@ -183,6 +183,17 @@ hardware is still on the list.
     lone-SELECT quit-grace is release-based now (a chord may form
     arbitrarily slowly without leaking a quit into the game).
 
+22. **PC-side dev tool + sprite editor** (July 2026). `tools/arcade-dev/
+    arcade`: scaffold a game from the SDK template (`arcade new`),
+    cross-compile it (`arcade build`), bake it into the volume next to
+    the built-ins (`arcade deploy`), and boot it (`arcade run`) — the
+    console lists it like any other title. `arcade sprites` opens a
+    self-contained browser pixel-art editor (palette/fill/eyedropper/
+    undo, 8-32 px, localStorage autosave) that exports SDK `sprite_t`
+    C code with SURF_TRANSPARENT for erased pixels. Verified
+    end-to-end: scaffolded DEMO, deployed, launched from the launcher,
+    scored points, hero sprite on screen.
+
 ## Later
 
 - **Intel HDA audio backend.** AC97 covers QEMU; real hardware
@@ -191,15 +202,9 @@ hardware is still on the list.
 - **DHCP (or at least static-IP config).** The stack still assumes
   slirp's 10.0.2.x world.
 
-- **PC-side game editor (far future).** Build games on a normal PC
-  with the SDK, export to removable media, console picks them up.
-
-- **PC-side game editor / dev tool (far future, just an idea).** Build an
-  editor that runs on a normal PC (not on ArcadeOS itself) for putting
-  together a game — levels, sprites, whatever — using the SDK, then
-  export it onto removable media (SD card or similar) and have the console
-  pick it up the way it already lists `*.ELF` files off the FAT32 volume.
-  Needs its own design pass.
+- **Visual level editor.** The dev tool covers code + sprites; a
+  drag-and-drop level/tilemap editor exporting C data would complete
+  the "build a game without leaving the tools" story.
 
 
 
