@@ -52,6 +52,11 @@ static uint8_t our_ip[4] = { 10, 0, 2, 86 };
 #define IP_UDP   17
 #define HTTP_PORT 80
 #define UDP_ECHO_PORT 7
+#define DHCP_CLIENT_PORT 68
+#define DHCP_SERVER_PORT 67
+
+/* When non-NULL, send_ip stamps this source address (DHCP: 0.0.0.0) */
+static const uint8_t* ip_src_override = 0;
 
 #define FRAME_MAX 1792
 #define SEG_DATA  1400          /* TCP payload per segment */
@@ -229,7 +234,7 @@ static void send_ip(const uint8_t* dst_mac, const uint8_t* dst_ip,
     ip->ttl       = 64;
     ip->proto     = proto;
     ip->checksum  = 0;
-    memcpy(ip->src, our_ip, 4);
+    memcpy(ip->src, ip_src_override ? ip_src_override : our_ip, 4);
     memcpy(ip->dst, dst_ip, 4);
     ip->checksum = htons16(checksum16(ip, 20, 0));
 
@@ -624,6 +629,104 @@ static void udp_tx(const uint8_t* dst_mac, const uint8_t* dst_ip,
     send_ip(dst_mac, dst_ip, IP_UDP, dgram, sizeof(udp_hdr_t) + len);
 }
 
+/* ──────── DHCP client ────────
+ *
+ * Standard DORA over broadcast at boot: DISCOVER → OFFER → REQUEST →
+ * ACK, then our_ip switches to the lease. No server (the two-console
+ * netplay wire, odd LANs)? After DHCP_DEADLINE_MS we stay on the
+ * MAC-derived static fallback and say so. Driven from net_poll.
+ */
+#define DHCP_MAGIC       0x63825363u
+#define DHCP_DEADLINE_MS 5000
+#define DHCP_RETRY_MS    900
+
+enum { DH_DISCOVER, DH_REQUEST, DH_BOUND, DH_FAILED };
+static int      dh_state = DH_FAILED;
+static uint32_t dh_xid;
+static uint32_t dh_next_tx, dh_deadline;
+static uint8_t  dh_offer_ip[4], dh_server_ip[4];
+
+static const uint8_t bcast_ip4[4]  = { 255, 255, 255, 255 };
+static const uint8_t bcast_mac6[6] = { 255, 255, 255, 255, 255, 255 };
+static const uint8_t zero_ip4[4]   = { 0, 0, 0, 0 };
+
+static void dhcp_tx(int is_request) {
+    static uint8_t pkt[300];
+    memset(pkt, 0, sizeof(pkt));
+    pkt[0] = 1;                          /* BOOTREQUEST */
+    pkt[1] = 1;                          /* Ethernet */
+    pkt[2] = 6;                          /* hlen */
+    memcpy(pkt + 4, &dh_xid, 4);
+    pkt[10] = 0x80;                      /* Flags: reply by broadcast */
+    memcpy(pkt + 28, rtl8139_mac(), 6);  /* chaddr */
+    uint32_t magic = htonl32(DHCP_MAGIC);
+    memcpy(pkt + 236, &magic, 4);
+
+    uint8_t* o = pkt + 240;
+    *o++ = 53; *o++ = 1; *o++ = (uint8_t)(is_request ? 3 : 1);
+    if (is_request) {
+        *o++ = 50; *o++ = 4; memcpy(o, dh_offer_ip, 4);  o += 4;
+        *o++ = 54; *o++ = 4; memcpy(o, dh_server_ip, 4); o += 4;
+    }
+    *o++ = 55; *o++ = 2; *o++ = 1; *o++ = 3;   /* Want: mask, router */
+    *o++ = 255;
+
+    ip_src_override = zero_ip4;          /* We have no address yet */
+    udp_tx(bcast_mac6, bcast_ip4, DHCP_CLIENT_PORT, DHCP_SERVER_PORT,
+           pkt, sizeof(pkt));
+    ip_src_override = 0;
+}
+
+static void dhcp_input(const uint8_t* d, uint32_t len) {
+    if (len < 244 || d[0] != 2) return;              /* BOOTREPLY only */
+    uint32_t xid; memcpy(&xid, d + 4, 4);
+    if (xid != dh_xid) return;
+    uint32_t magic; memcpy(&magic, d + 236, 4);
+    if (magic != htonl32(DHCP_MAGIC)) return;
+
+    /* Walk the options for message type (53) + server id (54) */
+    uint8_t mtype = 0, sid[4] = { 0, 0, 0, 0 };
+    for (uint32_t i = 240; i + 1 < len && d[i] != 255; ) {
+        uint8_t op = d[i], ol = d[i + 1];
+        if (i + 2 + ol > len) break;
+        if (op == 53 && ol >= 1) mtype = d[i + 2];
+        if (op == 54 && ol >= 4) memcpy(sid, d + i + 2, 4);
+        i += 2 + (uint32_t)ol;
+    }
+
+    if (dh_state == DH_DISCOVER && mtype == 2) {     /* OFFER */
+        memcpy(dh_offer_ip, d + 16, 4);              /* yiaddr */
+        memcpy(dh_server_ip, sid, 4);
+        dh_state = DH_REQUEST;
+        dh_next_tx = 0;                              /* REQUEST now */
+    } else if (dh_state == DH_REQUEST && mtype == 5) { /* ACK */
+        memcpy(our_ip, d + 16, 4);
+        dh_state = DH_BOUND;
+        terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+        terminal_writestring("[NET] DHCP lease: ");
+        for (int i = 0; i < 4; i++) {
+            terminal_writedec(our_ip[i]);
+            if (i < 3) terminal_writestring(".");
+        }
+        terminal_writestring("\n");
+    }
+}
+
+static void dhcp_poll(void) {
+    if (dh_state == DH_BOUND || dh_state == DH_FAILED) return;
+
+    if (system_ticks > dh_deadline) {
+        dh_state = DH_FAILED;
+        terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_BROWN, VGA_COLOR_BLACK));
+        terminal_writestring("[NET] No DHCP server - keeping static IP\n");
+        return;
+    }
+    if (system_ticks >= dh_next_tx) {
+        dhcp_tx(dh_state == DH_REQUEST);
+        dh_next_tx = system_ticks + DHCP_RETRY_MS;
+    }
+}
+
 static void handle_udp(const eth_hdr_t* eth, const ip_hdr_t* ip,
                        const uint8_t* payload, uint32_t len) {
     if (len < sizeof(udp_hdr_t)) return;
@@ -635,6 +738,11 @@ static void handle_udp(const eth_hdr_t* eth, const ip_hdr_t* ip,
     uint16_t dport = htons16(udp->dport);
 
     arp_learn(ip->src, eth->src);         /* Free reverse path */
+
+    if (dport == DHCP_CLIENT_PORT) {      /* DHCP replies */
+        dhcp_input(data, dlen);
+        return;
+    }
 
     if (dport == UDP_ECHO_PORT) {         /* RFC 862, the self-test */
         if (dlen > UDP_MSG_MAX) dlen = UDP_MSG_MAX;
@@ -744,7 +852,8 @@ uint32_t net_local_ip(void) {
 }
 
 int net_udp_bind(uint16_t port) {
-    if (!net_up || port == 0 || port == HTTP_PORT || port == UDP_ECHO_PORT)
+    if (!net_up || port == 0 || port == HTTP_PORT || port == UDP_ECHO_PORT ||
+        port == DHCP_CLIENT_PORT)
         return -1;
     udp_port = port;
     udp_head = udp_tail = 0;
@@ -812,11 +921,19 @@ void net_init(void) {
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     terminal_writestring("[NET] IP 10.0.2.");
     terminal_writedec(our_ip[3]);
-    terminal_writestring(" (from MAC), REST API on port 80\n");
+    terminal_writestring(" (static from MAC), REST API on port 80\n");
+
+    /* Ask the LAN for a proper lease; the static IP is the fallback */
+    dh_xid      = (system_ticks * 2654435761u) ^ 0xA5CADE05u;
+    dh_state    = DH_DISCOVER;
+    dh_next_tx  = 0;
+    dh_deadline = system_ticks + DHCP_DEADLINE_MS;
 }
 
 void net_poll(void) {
     if (!net_up) return;
+
+    dhcp_poll();
 
     for (int budget = 0; budget < 8; budget++) {
         uint32_t len = rtl8139_recv(frame_in, sizeof(frame_in));

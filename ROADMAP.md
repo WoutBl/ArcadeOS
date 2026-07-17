@@ -194,13 +194,19 @@ hardware is still on the list.
     end-to-end: scaffolded DEMO, deployed, launched from the launcher,
     scored points, hero sprite on screen.
 
+23. **DHCP client** (July 2026). Standard DORA over broadcast at boot
+    (src 0.0.0.0, driven from net_poll): the console takes a proper
+    lease when a server exists ([NET] DHCP lease: 10.0.2.15 under
+    QEMU slirp, REST + UDP echo verified on the leased address) and
+    falls back to the MAC-derived static IP after 5 s when none does
+    (verified on a serverless socket-netdev wire — the two-console
+    netplay case keeps working unchanged). Real LANs no longer need
+    to look like slirp.
+
 ## Later
 
 - **Intel HDA audio backend.** AC97 covers QEMU; real hardware
   increasingly exposes HDA only.
-
-- **DHCP (or at least static-IP config).** The stack still assumes
-  slirp's 10.0.2.x world.
 
 - **Visual level editor.** The dev tool covers code + sprites; a
   drag-and-drop level/tilemap editor exporting C data would complete
