@@ -41,4 +41,28 @@ uint32_t rewind_snapshot_age_ms(int i);
  * everything newer than it is discarded. */
 void rewind_request_restore(int i);
 
+/* ──────── v2: frame-exact scrubbing hooks (called from syscall.c) ──── */
+
+/* True while the game is re-executing recorded frames. Syscalls with
+ * side effects (sound, saves, score, msleep) must no-op then. */
+int rewind_replaying(void);
+
+/* True during any scrub/replay activity (guards the system menu). */
+int rewind_busy(void);
+
+/* Whether this present should reach the screen (replays render dark). */
+int rewind_should_blit(void);
+
+/* Runs the scrub hold-loop after the blit (may block; may not return
+ * control to the same timeline). */
+void rewind_post_blit(void);
+
+/* SYS_TICKS value for the caller: logged during replay, virtual-clock
+ * shifted after a rewind so games never see time jump. */
+uint32_t rewind_ticks(void);
+
+/* SYS_PAD_READ integration: during replay, overwrites *st from the
+ * frame log and returns 1; live, records *st and returns 0. */
+int rewind_feed_pad(int index, pad_state_t* st);
+
 #endif /* REWIND_H */

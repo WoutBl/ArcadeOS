@@ -7,6 +7,7 @@
  */
 
 #include "scheduler.h"
+#include "serial.h"
 #include "vga.h"
 #include "clock.h"
 #include "syscall.h"
@@ -58,6 +59,7 @@ void schedule(void) {
 
     /* Switch to new task */
     task_t* new_task = &tasks[next_index];
+
 
     /* Phase 3: Check pending signals before switching into this task */
     uint32_t active_signals = new_task->pending_signals & ~new_task->ignored_signals;

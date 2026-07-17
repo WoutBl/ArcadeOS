@@ -140,9 +140,14 @@ static void page_fault_handler(registers_t* regs) {
         terminal_writehex(faulting_addr);
         terminal_writestring(" (RIP 0x");
         terminal_writehex(regs->eip);
+        terminal_writestring(" RSP 0x");
+        terminal_writehex(regs->useresp);
+        terminal_writestring(" RBP 0x");
+        terminal_writehex(regs->ebp);
         if (error_code & 0x10)
             terminal_writestring(", NX: tried to execute data");
         terminal_writestring(") - terminated\n");
+
 
         current_task->state = TASK_DEAD;
         for (int i = 0; i < num_tasks; i++) {

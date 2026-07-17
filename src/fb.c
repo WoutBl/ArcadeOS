@@ -108,3 +108,48 @@ uint32_t fb_size_bytes(void) {
     /* Round up to a whole page for the paging code */
     return (size + 4095) & ~4095u;
 }
+
+/* ──────── Overlay drawing (see fb.h) ──────── */
+
+#include "font8x8.h"
+
+/* Overlays paint BOTH pages of a flip-capable surface: the visible one
+ * for the player, and the hidden one so neither the next flip nor a
+ * QEMU screendump (which reads from VRAM start) loses the overlay. */
+static void overlay_rect_on(uint32_t* fb, int x, int y, int w, int h,
+                            uint32_t color) {
+    uint32_t pitch = fb_p / 4;
+    for (int r = 0; r < h; r++)
+        for (int c = 0; c < w; c++)
+            fb[(uint32_t)(y + r) * pitch + (uint32_t)(x + c)] = color;
+}
+
+void fb_overlay_rect(int x, int y, int w, int h, uint32_t color) {
+    if (!fb_present) return;
+    overlay_rect_on(fb_ptr(), x, y, w, h, color);
+    if (fb_ptr_back() != fb_ptr())
+        overlay_rect_on(fb_ptr_back(), x, y, w, h, color);
+}
+
+static void overlay_text_on(uint32_t* fb, int x, int y, const char* s,
+                            uint32_t color, int scale) {
+    uint32_t pitch = fb_p / 4;
+    for (int i = 0; s[i]; i++) {
+        const uint8_t* g = font8x8_basic[(uint8_t)s[i] & 0x7F];
+        for (int r = 0; r < 8; r++)
+            for (int b = 0; b < 8; b++) {
+                if (!(g[r] & (1 << b))) continue;
+                for (int sy = 0; sy < scale; sy++)
+                    for (int sx = 0; sx < scale; sx++)
+                        fb[(uint32_t)(y + r * scale + sy) * pitch
+                           + (uint32_t)(x + i * 8 * scale + b * scale + sx)] = color;
+            }
+    }
+}
+
+void fb_overlay_text(int x, int y, const char* s, uint32_t color, int scale) {
+    if (!fb_present) return;
+    overlay_text_on(fb_ptr(), x, y, s, color, scale);
+    if (fb_ptr_back() != fb_ptr())
+        overlay_text_on(fb_ptr_back(), x, y, s, color, scale);
+}

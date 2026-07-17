@@ -31,6 +31,12 @@ uint32_t fb_phys_addr(void);    /* Physical address of the LFB */
 uint32_t fb_size_bytes(void);   /* pitch * height, page-rounded */
 uint32_t* fb_ptr(void);         /* Identity-mapped pointer to the DISPLAYED page */
 
+/* Overlay drawing on the DISPLAYED page — used by kernel UI that draws
+ * over a frozen or scrubbing game (system menu, rewind indicator).
+ * The game's next present simply paints over it. */
+void fb_overlay_rect(int x, int y, int w, int h, uint32_t color);
+void fb_overlay_text(int x, int y, const char* s, uint32_t color, int scale);
+
 /* ──────── Page flipping (Bochs/QEMU dispi; no-ops without it) ──────── */
 int  fb_flip_available(void);   /* 1 when double buffering is active */
 uint32_t* fb_ptr_back(void);    /* Hidden page (render target) */

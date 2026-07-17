@@ -170,11 +170,20 @@ hardware is still on the list.
 
 ## Up next
 
-## Later
+21. **Rewind v2 — frame-exact scrubbing** (July 2026). The kernel now
+    RECORDS what every game observes per presented frame (both pad
+    states + the tick value) and reaches ANY frame by restoring the
+    nearest snapshot and letting the game re-execute forward as its own
+    replay engine — msleep skipped, blits suppressed, sound/saves/score
+    muted during replay. HOLD SELECT+L1 (Tab+Q) and time scrubs
+    backward in 8-frame hops with an on-screen indicator and per-hop
+    blips; release to resume playing from the frame on screen. A
+    virtual-clock offset keeps SYS_TICKS continuous across the cut so
+    games that stash absolute tick values never see time jump. The
+    lone-SELECT quit-grace is release-based now (a chord may form
+    arbitrarily slowly without leaking a quit into the game).
 
-- **Rewind v2: frame-exact scrubbing.** Log gamepad reads between
-  snapshots and replay them after a restore to reach any frame, plus
-  hold-to-rewind. The determinism the SDK guarantees makes it cheap.
+## Later
 
 - **Intel HDA audio backend.** AC97 covers QEMU; real hardware
   increasingly exposes HDA only.

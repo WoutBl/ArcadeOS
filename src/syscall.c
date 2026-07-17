@@ -324,8 +324,11 @@ static void syscall_handler(registers_t* regs) {
             /* Universal rewind: snapshot/restore at the frame boundary.
              * Runs BEFORE the blit so a rewound frame is what appears. */
             rewind_on_present();
-            gfx_present_buffer((const uint32_t*)(uintptr_t)ptr);
-            sysmenu_on_present();  /* SELECT+START menu (may block) */
+            if (rewind_should_blit())
+                gfx_present_buffer((const uint32_t*)(uintptr_t)ptr);
+            rewind_post_blit();    /* Scrub hold-loop (may block) */
+            if (!rewind_busy())
+                sysmenu_on_present();  /* SELECT+START menu (may block) */
             regs->eax = 0;
             break;
         }
@@ -338,14 +341,16 @@ static void syscall_handler(registers_t* regs) {
 
             usb_poll();                    /* Hot-plug + future HID reports */
             gamepad_get_state(index, out);
-            rewind_filter_pad(index, out); /* SELECT+L1 is a system combo */
+            rewind_filter_pad(index, out); /* System combos, hidden from games */
+            rewind_feed_pad(index, out);   /* Replay feeds the log back */
             regs->eax = 0;
             break;
         }
 
         case SYS_TICKS:
-            /* Milliseconds since boot – for frame timing */
-            regs->eax = system_ticks;
+            /* Milliseconds since boot — virtual-clock shifted after a
+             * rewind, logged values during a replay */
+            regs->eax = rewind_ticks();
             break;
 
         case SYS_MSLEEP: {
@@ -353,6 +358,7 @@ static void syscall_handler(registers_t* regs) {
              * ticking and other tasks get scheduled. */
             /* Pure tick-wait: hlt wakes on the next PIT interrupt (1 ms).
              * Other tasks still run – scheduler_tick preempts us. */
+            if (rewind_replaying()) { regs->eax = 0; break; }  /* Fast-forward */
             uint32_t target = system_ticks + regs->ebx;
             while (system_ticks < target)
                 asm volatile("sti\nhlt");
@@ -403,6 +409,7 @@ static void syscall_handler(registers_t* regs) {
             uint32_t       len  = regs->edx;
 
             if (!ustr(name) || len > 64 * 1024 || !urd(buf, len)) { regs->eax = (uint32_t)-1; break; }
+            if (rewind_replaying()) { regs->eax = 0; break; }  /* Already saved once */
             int bad = 0;
             for (int i = 0; name[i]; i++)
                 if (name[i] == '/') { bad = 1; break; }
@@ -433,6 +440,7 @@ static void syscall_handler(registers_t* regs) {
 
         case SYS_SOUND: {
             /* EBX = frequency in Hz (0 stops playback), ECX = duration ms */
+            if (rewind_replaying()) { regs->eax = 0; break; }
             audio_tone((uint32_t)regs->ebx, (uint32_t)regs->ecx);
             regs->eax = 0;
             break;
@@ -442,6 +450,7 @@ static void syscall_handler(registers_t* regs) {
             /* EBX = sound_req_t*. Tones and PCM clips on mixer voices.
              * PCM data is validated then COPIED kernel-side, so the
              * game's buffer can be reused immediately. */
+            if (rewind_replaying()) { regs->eax = 0; break; }
             const sound_req_t* rq = (const sound_req_t*)regs->ebx;
             if (!urd(rq, sizeof(sound_req_t)) || rq->voice >= SOUND_VOICES) {
                 regs->eax = (uint32_t)-1; break;
@@ -519,7 +528,9 @@ static void syscall_handler(registers_t* regs) {
             break;
         }
 
-        case SYS_SCORE: {
+        case SYS_SCORE:
+            if (rewind_replaying()) { regs->eax = 0; break; }
+        {
             /* Live score report for the REST API (/api/status) and the
              * central highscore board */
             if (current_task) {

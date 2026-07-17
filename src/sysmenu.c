@@ -5,7 +5,6 @@
 #include "sysmenu.h"
 #include "rewind.h"
 #include "fb.h"
-#include "font8x8.h"
 #include "gamepad.h"
 #include "usb.h"
 #include "audio.h"
@@ -19,32 +18,6 @@ void sysmenu_request(void) {
     menu_requested = 1;
 }
 
-/* ──────── Direct framebuffer drawing (displayed page) ──────── */
-
-static void px_rect(int x, int y, int w, int h, uint32_t c) {
-    uint32_t* fb    = fb_ptr();
-    uint32_t  pitch = fb_pitch() / 4;
-    for (int r = 0; r < h; r++)
-        for (int cx = 0; cx < w; cx++)
-            fb[(uint32_t)(y + r) * pitch + (uint32_t)(x + cx)] = c;
-}
-
-static void px_text(int x, int y, const char* s, uint32_t c, int scale) {
-    uint32_t* fb    = fb_ptr();
-    uint32_t  pitch = fb_pitch() / 4;
-    for (int i = 0; s[i]; i++) {
-        const uint8_t* g = font8x8_basic[(uint8_t)s[i] & 0x7F];
-        for (int r = 0; r < 8; r++)
-            for (int b = 0; b < 8; b++) {
-                if (!(g[r] & (1 << b))) continue;
-                for (int sy = 0; sy < scale; sy++)
-                    for (int sx = 0; sx < scale; sx++)
-                        fb[(uint32_t)(y + r * scale + sy) * pitch
-                           + (uint32_t)(x + i * 8 * scale + b * scale + sx)] = c;
-            }
-    }
-}
-
 /* ──────── The menu ──────── */
 
 static void draw_menu(int sel, int n_rewind) {
@@ -53,10 +26,10 @@ static void draw_menu(int sel, int n_rewind) {
     int x = ((int)fb_width() - w) / 2;
     int y = ((int)fb_height() - h) / 2;
 
-    px_rect(x - 4, y - 4, w + 8, h + 8, 0x7080FF);      /* Border */
-    px_rect(x, y, w, h, 0x101430);                      /* Panel */
-    px_text(x + 24, y + 20, "ARCADE OS", 0xFFFFFF, 2);
-    px_rect(x, y + 48, w, 2, 0x7080FF);
+    fb_overlay_rect(x - 4, y - 4, w + 8, h + 8, 0x7080FF);      /* Border */
+    fb_overlay_rect(x, y, w, h, 0x101430);                      /* Panel */
+    fb_overlay_text(x + 24, y + 20, "ARCADE OS", 0xFFFFFF, 2);
+    fb_overlay_rect(x, y + 48, w, 2, 0x7080FF);
 
     int ey = y + 64;
     for (int i = 0; i < entries; i++) {
@@ -86,15 +59,15 @@ static void draw_menu(int sel, int n_rewind) {
         }
 
         if (i == sel) {
-            px_rect(x + 12, ey - 6, w - 24, 28, 0x2A3C8C);
-            px_text(x + 20, ey, ">", 0xFFDC50, 2);
+            fb_overlay_rect(x + 12, ey - 6, w - 24, 28, 0x2A3C8C);
+            fb_overlay_text(x + 20, ey, ">", 0xFFDC50, 2);
         }
-        px_text(x + 44, ey, label,
+        fb_overlay_text(x + 44, ey, label,
                 i == sel ? 0xFFFFFF : (i > n_rewind ? 0xFF9078 : 0x96A0C8), 2);
         ey += 30;
     }
 
-    px_text(x + 24, y + h - 20, "SELECT+START OPENS THIS MENU", 0x5A64A0, 1);
+    fb_overlay_text(x + 24, y + h - 20, "SELECT+START OPENS THIS MENU", 0x5A64A0, 1);
 }
 
 /* SYS_EXIT semantics without the game's cooperation */

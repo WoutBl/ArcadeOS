@@ -31,6 +31,11 @@ void gamepad_get_state(int index, pad_state_t* out);
  * so the game still observes the press on a later poll. */
 void gamepad_relatch(int index, uint16_t buttons);
 
+/* Current raw held-button mask WITHOUT consuming press-edge latches —
+ * for kernel code (rewind scrub) that must watch a chord while the
+ * game's own input stream is being replayed or withheld. */
+uint16_t gamepad_raw_buttons(int index);
+
 /* Called by the USB HID layer when a report for pad 'index' arrives */
 void gamepad_feed_usb(int index, uint16_t buttons,
                       int16_t lx, int16_t ly, int16_t rx, int16_t ry,
