@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ArcadeOS Level Editor</title>
+<style>
+  :root { --bg:#0a0c22; --panel:#12163c; --line:#5064ff; --text:#e8ecff; --dim:#7884c8; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text); font-family:ui-monospace,Menlo,monospace;
+         display:flex; flex-direction:column; align-items:center; padding:24px; gap:16px; }
+  h1 { font-size:20px; letter-spacing:2px; }
+  h1 span { color:var(--line); }
+  .row { display:flex; gap:16px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+  .panel { background:var(--panel); border:2px solid var(--line); border-radius:8px; padding:14px; }
+  canvas#grid { image-rendering:pixelated; cursor:crosshair; border:2px solid var(--line); background:#05060f; }
+  .tools { display:flex; flex-direction:column; gap:10px; min-width:240px; }
+  button, select { background:#1a2050; color:var(--text); border:1px solid var(--line);
+    border-radius:4px; padding:6px 10px; font:inherit; cursor:pointer; }
+  button:hover { background:#26308c; }
+  button.active { background:var(--line); color:#fff; }
+  .tile-row { display:flex; align-items:center; gap:8px; padding:2px 4px; border-radius:4px; cursor:pointer; }
+  .tile-row.sel { background:#26308c; }
+  .tile-row .chip { width:22px; height:22px; border:1px solid #000; border-radius:3px; flex:none; }
+  .tile-row.empty .chip { background:repeating-conic-gradient(#666 0% 25%, #333 0% 50%) 0 0/8px 8px; }
+  .tile-row label { font-size:11px; color:var(--dim); display:flex; gap:4px; align-items:center; }
+  .tile-row input[type=color] { width:26px; height:22px; border:none; background:none; padding:0; cursor:pointer; }
+  textarea { width:660px; height:170px; background:#0a0c22; color:#9fe89f; border:1px solid var(--line);
+    border-radius:4px; font:11px ui-monospace,Menlo,monospace; padding:8px; }
+  label { color:var(--dim); font-size:12px; }
+  .hint { color:var(--dim); font-size:11px; max-width:660px; text-align:center; }
+  input[type=text] { background:#0a0c22; color:var(--text); border:1px solid var(--line);
+    border-radius:4px; padding:5px; font:inherit; width:120px; }
+  #tiles { display:flex; flex-direction:column; gap:2px; max-height:330px; overflow-y:auto; }
+</style>
+</head>
+<body>
+<h1>ARCADE<span>OS</span> LEVEL EDITOR</h1>
+
+<div class="row">
+  <div class="panel"><canvas id="grid"></canvas></div>
+
+  <div class="panel tools">
+    <label>LEVEL NAME</label>
+    <input type="text" id="name" value="level1" spellcheck="false">
+    <label>GRID (one console screen)</label>
+    <select id="gridsize">
+      <option value="20x15x32" selected>20 x 15 tiles @ 32px</option>
+      <option value="40x30x16">40 x 30 tiles @ 16px</option>
+      <option value="80x60x8">80 x 60 tiles @ 8px</option>
+    </select>
+    <label>TOOL</label>
+    <div class="row" style="gap:6px">
+      <button id="t-paint" class="active">PAINT</button>
+      <button id="t-fill">FILL</button>
+    </div>
+    <label>TILES (click to select; 0 erases; right-drag erases too)</label>
+    <div id="tiles"></div>
+    <div class="row" style="gap:6px">
+      <button id="undo">UNDO</button>
+      <button id="clear">CLEAR</button>
+      <button id="border">WALL BORDER</button>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="row" style="gap:8px; margin-bottom:8px">
+    <button id="export">EXPORT C</button>
+    <button id="copy">COPY</button>
+    <button id="download">DOWNLOAD .h</button>
+  </div>
+  <textarea id="out" spellcheck="false" placeholder="EXPORT C writes an SDK tilemap here — paste it into your game's level.h"></textarea>
+</div>
+
+<p class="hint">Exports a tilemap_t + colors + solid bitmask for the SDK:
+draw with arcade_draw_tilemap(), collide with arcade_tilemap_hits().
+SOLID tiles block the player; decorative ones don't. Auto-saves to this
+browser. U = undo.</p>
+
+<script>
+"use strict";
+const grid = document.getElementById("grid");
+const gctx = grid.getContext("2d");
+
+let W = 20, H = 15, TILE = 32;      // grid in tiles + tile px (console-side)
+let CELL = 26;                       // on-screen cell size
+let cells = [];                      // W*H of 0..15
+let tool = "paint";
+let cur = 1;                         // selected tile index
+let undoStack = [];
+
+const defTiles = [
+  { c:"#000000", solid:false },              /* 0 = empty (eraser) */
+  { c:"#3c64ff", solid:true  },              /* 1 = wall */
+  { c:"#78dc96", solid:true  },              /* 2 = block */
+  { c:"#e05050", solid:true  },              /* 3 = hazard-ish */
+  { c:"#ffd37e", solid:false },              /* 4 = pickup */
+  { c:"#b478ff", solid:false },
+  { c:"#50c8c8", solid:true  },
+  { c:"#ffdc50", solid:false },
+  { c:"#1b2450", solid:false },
+  { c:"#ff9078", solid:true  },
+  { c:"#c8c8d2", solid:true  },
+  { c:"#787878", solid:true  },
+  { c:"#a05028", solid:true  },
+  { c:"#f0a0c8", solid:false },
+  { c:"#ffffff", solid:false },
+  { c:"#0a4a20", solid:false },
+];
+let tiles = JSON.parse(JSON.stringify(defTiles));
+
+function blank() { return Array(W * H).fill(0); }
+
+function resize(w, h, t) {
+  W = w; H = h; TILE = t;
+  CELL = Math.max(8, Math.floor(520 / W));
+  grid.width = W * CELL; grid.height = H * CELL;
+  if (cells.length !== W * H) cells = blank();
+  draw();
+}
+
+function draw() {
+  gctx.clearRect(0, 0, grid.width, grid.height);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const v = cells[y * W + x];
+      if (v) { gctx.fillStyle = tiles[v].c; gctx.fillRect(x * CELL, y * CELL, CELL, CELL); }
+    }
+  gctx.strokeStyle = "rgba(80,100,255,.18)";
+  for (let i = 0; i <= W; i++) { gctx.beginPath(); gctx.moveTo(i*CELL,0); gctx.lineTo(i*CELL,H*CELL); gctx.stroke(); }
+  for (let i = 0; i <= H; i++) { gctx.beginPath(); gctx.moveTo(0,i*CELL); gctx.lineTo(W*CELL,i*CELL); gctx.stroke(); }
+  localStorage.setItem("arcade-level", JSON.stringify(
+    { w:W, h:H, t:TILE, cells, tiles, name:document.getElementById("name").value }));
+}
+
+function cellAt(ev) {
+  const r = grid.getBoundingClientRect();
+  const x = Math.floor((ev.clientX - r.left) / CELL);
+  const y = Math.floor((ev.clientY - r.top) / CELL);
+  return (x >= 0 && y >= 0 && x < W && y < H) ? y * W + x : -1;
+}
+
+function snapshot() { undoStack.push([...cells]); if (undoStack.length > 64) undoStack.shift(); }
+
+function apply(i, val) {
+  if (i < 0) return;
+  if (tool === "fill") {
+    const target = cells[i];
+    if (target === val) return;
+    const st = [i];
+    while (st.length) {
+      const j = st.pop();
+      if (j < 0 || j >= W * H || cells[j] !== target) continue;
+      cells[j] = val;
+      const x = j % W;
+      if (x > 0) st.push(j - 1);
+      if (x < W - 1) st.push(j + 1);
+      st.push(j - W, j + W);
+    }
+  } else {
+    cells[i] = val;
+  }
+  draw();
+}
+
+let painting = 0;   // 1 = left (paint cur), 2 = right (erase)
+grid.addEventListener("mousedown", e => {
+  e.preventDefault(); snapshot();
+  painting = (e.button === 2) ? 2 : 1;
+  apply(cellAt(e), painting === 2 ? 0 : cur);
+});
+grid.addEventListener("mousemove", e => {
+  if (painting && tool === "paint") apply(cellAt(e), painting === 2 ? 0 : cur);
+});
+window.addEventListener("mouseup", () => painting = 0);
+grid.addEventListener("contextmenu", e => e.preventDefault());
+
+for (const t of ["paint", "fill"])
+  document.getElementById("t-" + t).onclick = () => {
+    tool = t;
+    document.getElementById("t-paint").classList.toggle("active", t === "paint");
+    document.getElementById("t-fill").classList.toggle("active", t === "fill");
+  };
+
+function renderTiles() {
+  const box = document.getElementById("tiles");
+  box.innerHTML = "";
+  tiles.forEach((t, i) => {
+    const row = document.createElement("div");
+    row.className = "tile-row" + (i === cur ? " sel" : "") + (i === 0 ? " empty" : "");
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    if (i) chip.style.background = t.c;
+    row.appendChild(chip);
+
+    const name = document.createElement("span");
+    name.textContent = i === 0 ? "0 ERASE" : String(i).padStart(2, " ");
+    name.style.fontSize = "12px";
+    row.appendChild(name);
+
+    if (i) {
+      const col = document.createElement("input");
+      col.type = "color"; col.value = t.c;
+      col.oninput = () => { t.c = col.value; chip.style.background = t.c; draw(); };
+      col.onclick = ev => ev.stopPropagation();
+      row.appendChild(col);
+
+      const lab = document.createElement("label");
+      const chk = document.createElement("input");
+      chk.type = "checkbox"; chk.checked = t.solid;
+      chk.onchange = () => { t.solid = chk.checked; draw(); };
+      chk.onclick = ev => ev.stopPropagation();
+      lab.appendChild(chk);
+      lab.appendChild(document.createTextNode("SOLID"));
+      row.appendChild(lab);
+    }
+    row.onclick = () => { cur = i; renderTiles(); };
+    box.appendChild(row);
+  });
+}
+
+document.getElementById("gridsize").onchange = e => {
+  const [w, h, t] = e.target.value.split("x").map(Number);
+  snapshot(); cells = []; resize(w, h, t);
+};
+document.getElementById("undo").onclick = () => { if (undoStack.length) { cells = undoStack.pop(); draw(); } };
+document.getElementById("clear").onclick = () => { snapshot(); cells = blank(); draw(); };
+document.getElementById("border").onclick = () => {
+  snapshot();
+  for (let x = 0; x < W; x++) { cells[x] = cur || 1; cells[(H - 1) * W + x] = cur || 1; }
+  for (let y = 0; y < H; y++) { cells[y * W] = cur || 1; cells[y * W + W - 1] = cur || 1; }
+  draw();
+};
+window.addEventListener("keydown", e => { if (e.key === "u") document.getElementById("undo").click(); });
+
+function exportC() {
+  const name = (document.getElementById("name").value || "level")
+    .toLowerCase().replace(/[^a-z0-9_]/g, "");
+  const U = name.toUpperCase();
+  let solid = 0;
+  tiles.forEach((t, i) => { if (i && t.solid) solid |= (1 << i); });
+
+  let out = `/* ${name}: ${W}x${H} tiles @ ${TILE}px — ArcadeOS level editor */\n`;
+  out += `static const uint8_t ${name}_cells[${W * H}] = {\n`;
+  for (let y = 0; y < H; y++) {
+    out += "    ";
+    for (let x = 0; x < W; x++) out += cells[y * W + x] + ",";
+    out += "\n";
+  }
+  out += `};\n`;
+  out += `static const tilemap_t ${name}_map = { ${name}_cells, ${W}, ${H}, ${TILE} };\n`;
+  out += `static const uint32_t ${name}_colors[16] = {\n    `;
+  tiles.forEach((t, i) => {
+    out += "0x" + t.c.slice(1).toUpperCase() + ",";
+    if (i % 8 === 7) out += "\n    ";
+  });
+  out = out.trimEnd() + "\n};\n";
+  out += `#define ${U}_SOLID 0x${solid.toString(16).toUpperCase()}u  /* arcade_tilemap_hits mask */\n`;
+  document.getElementById("out").value = out;
+  return out;
+}
+document.getElementById("export").onclick = exportC;
+document.getElementById("copy").onclick = () => navigator.clipboard.writeText(exportC());
+document.getElementById("download").onclick = () => {
+  const name = (document.getElementById("name").value || "level").toLowerCase();
+  const blob = new Blob([exportC()], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name + ".h";
+  a.click();
+};
+
+/* Restore last session */
+try {
+  const s = JSON.parse(localStorage.getItem("arcade-level"));
+  if (s && s.cells) {
+    W = s.w; H = s.h; TILE = s.t; cells = s.cells;
+    if (s.tiles) tiles = s.tiles;
+    if (s.name) document.getElementById("name").value = s.name;
+    document.getElementById("gridsize").value = `${W}x${H}x${TILE}`;
+  }
+} catch (e) { /* fresh */ }
+
+renderTiles();
+resize(W, H, TILE);
+</script>
+</body>
+</html>

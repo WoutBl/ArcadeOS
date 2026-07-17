@@ -71,6 +71,30 @@ int arcade_aabb(int x1, int y1, int w1, int h1,
 /* Draw e->sprite at the entity position (no-op when sprite is NULL) */
 void arcade_entity_draw(surface_t* s, const entity_t* e, int scale);
 
+/* ──────── Tilemaps (levels from the PC-side level editor) ────────
+ *
+ * A level is a grid of tile indices (0 = empty) plus per-index colors
+ * and a solidity bitmask — exactly what `arcade levels` exports. Draw
+ * the whole grid in one call; query cells by pixel for collision.
+ */
+typedef struct {
+    const uint8_t* cells;    /* w*h tile indices, row-major, 0 = empty */
+    int w, h;                /* Grid size in tiles */
+    int tile;                /* Tile edge in pixels */
+} tilemap_t;
+
+/* Fill one rect per non-empty cell, colors[index] per tile. */
+void arcade_draw_tilemap(surface_t* s, const tilemap_t* m,
+                         const uint32_t* colors);
+
+/* Tile index at pixel (px,py), or 0 outside the map. */
+int arcade_tile_at(const tilemap_t* m, int px, int py);
+
+/* Does the axis-aligned box touch any tile whose bit is set in
+ * solid_mask (bit N = tile index N)? The standard wall check. */
+int arcade_tilemap_hits(const tilemap_t* m, uint32_t solid_mask,
+                        int x, int y, int w, int h);
+
 /* ──────── Save slots ──────── */
 
 /* Whole-file save/load in slot 0-9. `game` is at most 7 characters

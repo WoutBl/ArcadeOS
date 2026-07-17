@@ -11,6 +11,7 @@ FAT32 root, so "shipping" a game is just deploying the volume image.
   arcade deploy [DIR]     build + bake the game into arcadeos.img
   arcade run [DIR]        deploy + boot QEMU with the volume
   arcade sprites          open the pixel-art sprite editor (browser)
+  arcade levels           open the tilemap level editor (browser)
 
 The tool lives inside the ArcadeOS repo and uses its cross toolchain
 (x86_64-elf-gcc) and SDK (build/libarcade.a). NOTE: a plain `make`
@@ -60,7 +61,7 @@ def cmd_new(argv):
     os.makedirs(dest)
 
     tpl = os.path.join(TOOL_DIR, "templates")
-    for fn in ("main.c", "sprites.h"):
+    for fn in ("main.c", "sprites.h", "level.h"):
         with open(os.path.join(tpl, fn)) as f:
             src = f.read()
         src = src.replace("@NAME@", game_name(dest)) \
@@ -132,9 +133,16 @@ def cmd_sprites(argv):
     webbrowser.open("file://" + page)
 
 
+def cmd_levels(argv):
+    page = os.path.join(TOOL_DIR, "level-editor.html")
+    print(f"opening {page}")
+    webbrowser.open("file://" + page)
+
+
 def main():
     cmds = {"new": cmd_new, "build": cmd_build,
-            "deploy": cmd_deploy, "run": cmd_run, "sprites": cmd_sprites}
+            "deploy": cmd_deploy, "run": cmd_run,
+            "sprites": cmd_sprites, "levels": cmd_levels}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__.strip())
         sys.exit(0 if len(sys.argv) < 2 else 1)

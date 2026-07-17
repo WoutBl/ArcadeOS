@@ -215,11 +215,22 @@ hardware is still on the list.
     VBE fallback, AHCI and DHCP done, the console now speaks every
     real-hardware dialect it needs.
 
+25. **Visual level editor + SDK tilemaps** (July 2026). The SDK grew a
+    tilemap layer (tilemap_t, arcade_draw_tilemap, arcade_tile_at,
+    arcade_tilemap_hits with a solidity bitmask), and `arcade levels`
+    opens a browser tilemap editor matching the sprite editor: 16 tile
+    slots with editable colors + per-tile SOLID flags, paint/fill/
+    right-drag-erase, one-click wall border, localStorage autosave,
+    EXPORT C in exactly the SDK's format. The game template is now a
+    playable example — walled arena, solid blocks, collectible
+    pickups — verified end-to-end on the console: walls stop the hero,
+    walking over gold collects it (live score via /api/status), the
+    map mutates. The "build a game without leaving the tools" story is
+    complete.
+
 ## Later
 
-- **Visual level editor.** The dev tool covers code + sprites; a
-  drag-and-drop level/tilemap editor exporting C data would complete
-  the "build a game without leaving the tools" story.
+(Empty — everything from here on is new ideas or hardware day.)
 
 
 

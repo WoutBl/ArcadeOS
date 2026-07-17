@@ -400,3 +400,38 @@ int arcade_net_join_lan(arcade_t* a, int port, const char* tag,
     }
     return -1;
 }
+
+/* ──────── Tilemaps (see arcade.h) ──────── */
+
+void arcade_draw_tilemap(surface_t* s, const tilemap_t* m,
+                         const uint32_t* colors) {
+    for (int ty = 0; ty < m->h; ty++)
+        for (int tx = 0; tx < m->w; tx++) {
+            uint8_t c = m->cells[ty * m->w + tx];
+            if (!c) continue;
+            surf_fill_rect(s, tx * m->tile, ty * m->tile,
+                           m->tile, m->tile, colors[c]);
+        }
+}
+
+int arcade_tile_at(const tilemap_t* m, int px, int py) {
+    if (px < 0 || py < 0) return 0;
+    int tx = px / m->tile, ty = py / m->tile;
+    if (tx >= m->w || ty >= m->h) return 0;
+    return m->cells[ty * m->w + tx];
+}
+
+int arcade_tilemap_hits(const tilemap_t* m, uint32_t solid_mask,
+                        int x, int y, int w, int h) {
+    /* Check every tile the box overlaps (corners aren't enough for
+     * boxes bigger than a tile) */
+    int tx0 = x / m->tile, ty0 = y / m->tile;
+    int tx1 = (x + w - 1) / m->tile, ty1 = (y + h - 1) / m->tile;
+    if (x < 0 || y < 0) return 1;                 /* Off-map = wall */
+    if (tx1 >= m->w || ty1 >= m->h) return 1;
+    for (int ty = ty0; ty <= ty1; ty++)
+        for (int tx = tx0; tx <= tx1; tx++)
+            if (solid_mask & (1u << m->cells[ty * m->w + tx]))
+                return 1;
+    return 0;
+}
