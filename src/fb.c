@@ -153,3 +153,18 @@ void fb_overlay_text(int x, int y, const char* s, uint32_t color, int scale) {
     if (fb_ptr_back() != fb_ptr())
         overlay_text_on(fb_ptr_back(), x, y, s, color, scale);
 }
+
+static void overlay_image_on(uint32_t* fb, int x, int y, int w, int h,
+                             const uint32_t* px) {
+    uint32_t pitch = fb_p / 4;
+    for (int r = 0; r < h; r++)
+        for (int c = 0; c < w; c++)
+            fb[(uint32_t)(y + r) * pitch + (uint32_t)(x + c)] = px[r * w + c];
+}
+
+void fb_overlay_image(int x, int y, int w, int h, const uint32_t* px) {
+    if (!fb_present) return;
+    overlay_image_on(fb_ptr(), x, y, w, h, px);
+    if (fb_ptr_back() != fb_ptr())
+        overlay_image_on(fb_ptr_back(), x, y, w, h, px);
+}

@@ -60,6 +60,7 @@ static int      enabled = 0;
 static int      ring_base  = 0;         /* Index of the oldest snapshot */
 static int      ring_count = 0;
 static uint32_t slot_time[REWIND_SLOTS];   /* Real ticks (menu ages) */
+static uint32_t slot_thumb[REWIND_SLOTS][REWIND_THUMB_W * REWIND_THUMB_H];
 static uint32_t slot_vticks[REWIND_SLOTS]; /* Virtual ticks (continuity) */
 static uint32_t slot_frame[REWIND_SLOTS];  /* Present counter at snapshot */
 
@@ -119,6 +120,27 @@ static void slot_copy(int slot_idx, int restore) {
     paging_return_cr3(b);
 }
 
+/* Downsample the displayed frame into the slot's thumbnail */
+static void thumb_capture(int slot) {
+    if (!fb_available()) return;
+    const uint32_t* fb = fb_ptr();
+    uint32_t pitch = fb_pitch() / 4;
+    uint32_t sx = (fb_width()  << 8) / REWIND_THUMB_W;   /* 24.8 step */
+    uint32_t sy = (fb_height() << 8) / REWIND_THUMB_H;
+    for (int ty = 0; ty < REWIND_THUMB_H; ty++) {
+        uint32_t srcy = ((uint32_t)ty * sy) >> 8;
+        for (int tx = 0; tx < REWIND_THUMB_W; tx++)
+            slot_thumb[slot][ty * REWIND_THUMB_W + tx] =
+                fb[srcy * pitch + (((uint32_t)tx * sx) >> 8)];
+    }
+}
+
+const uint32_t* rewind_snapshot_thumb(int i) {
+    if (!enabled || i < 0 || i >= ring_count) return 0;
+    int slot = (ring_base + ring_count - 1 - i) % REWIND_SLOTS;
+    return slot_thumb[slot];
+}
+
 static void take_snapshot(void) {
     int slot = (ring_base + ring_count) % REWIND_SLOTS;
     if (ring_count == REWIND_SLOTS) {
@@ -128,6 +150,7 @@ static void take_snapshot(void) {
         ring_count--;
     }
     slot_copy(slot, 0);
+    thumb_capture(slot);
     slot_time[slot]   = system_ticks;
     slot_vticks[slot] = system_ticks - tick_offset;
     slot_frame[slot]  = present_counter;
@@ -415,6 +438,20 @@ int rewind_filter_pad(int index, pad_state_t* st) {
     if (st->buttons & PAD_BTN_SELECT) {
         select_pending = 1;
         st->buttons &= (uint16_t)~PAD_BTN_SELECT;
+    } else if (select_pending &&
+               (st->buttons & (PAD_BTN_START | PAD_BTN_L1))) {
+        /* The chord's keys straddled two slow polls: SELECT was
+         * withheld and already released, and its partner only shows
+         * up now (live or latched). Reassemble the chord instead of
+         * delivering a lethal lone SELECT. */
+        if (st->buttons & PAD_BTN_START)
+            sysmenu_request();
+        /* (A late L1 can't scrub-hold — swallow it silently.) */
+        select_pending = 0;
+        st->buttons = 0;
+        st->lx = st->ly = st->rx = st->ry = 0;
+        cooldown_until = system_ticks + 400;
+        return 1;
     } else if (select_pending) {
         select_pending = 0;
         /* Released without a chord: this WAS a quit tap — deliver it

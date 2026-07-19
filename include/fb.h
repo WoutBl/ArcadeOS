@@ -36,6 +36,7 @@ uint32_t* fb_ptr(void);         /* Identity-mapped pointer to the DISPLAYED page
  * The game's next present simply paints over it. */
 void fb_overlay_rect(int x, int y, int w, int h, uint32_t color);
 void fb_overlay_text(int x, int y, const char* s, uint32_t color, int scale);
+void fb_overlay_image(int x, int y, int w, int h, const uint32_t* px);
 
 /* ──────── Page flipping (Bochs/QEMU dispi; no-ops without it) ──────── */
 int  fb_flip_available(void);   /* 1 when double buffering is active */

@@ -228,9 +228,44 @@ hardware is still on the list.
     map mutates. The "build a game without leaving the tools" story is
     complete.
 
-## Later
+26. **Visual save-state picker** (July 2026). The user request that
+    finished the pause menu: every rewind snapshot now captures a
+    downscaled screenshot (104x78) alongside the memory image, and
+    SELECT+START shows a THUMBNAIL GRID of the actual moments — pick
+    the exact state to jump back to instead of guessing from "5S AGO".
+    Also fixed a chord-under-load leak: when the two chord keys
+    straddle slow polls, the filter now reassembles the chord from the
+    withheld SELECT + the late partner instead of delivering a lethal
+    lone SELECT (= quit) to the game.
 
-(Empty — everything from here on is new ideas or hardware day.)
+## Later — ideas no OS has done before
+
+The rewind engine proved the recipe: deterministic SDK games + a
+kernel that owns their memory and inputs = features no game has to
+implement. Same recipe, unexplored directions:
+
+- **Beam a running game to another console.** Pause, snapshot, stream
+  the pages over UDP to a console on the LAN (both volumes carry the
+  same ELF), restore at a present boundary — the game CONTINUES on
+  the other machine, same frame, same score. Kernel-level live
+  process migration as a consumer feature.
+
+- **Ghost replay.** The input log already reconstructs any run.
+  Record a best run to disk, then replay it through a second instance
+  of the game whose framebuffer is composited translucently over the
+  live one — race your own ghost in ANY game, zero game support.
+
+- **Attract mode.** Arcade cabinets demo themselves. The launcher,
+  idle for 60 s, could replay a recorded input log through a game
+  (blits on, inputs from the log) — self-playing demos for every
+  title, recorded by just... playing.
+
+- **Remote spectating.** /api/screen serving downscaled BMP frames —
+  watch someone's run live in a browser tab from another room.
+
+## Hardware day
+
+(Everything software-side is ready — see 'Not right now'.)
 
 
 

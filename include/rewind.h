@@ -37,6 +37,12 @@ int rewind_filter_pad(int index, pad_state_t* st);
 int      rewind_snapshot_count(void);
 uint32_t rewind_snapshot_age_ms(int i);
 
+/* Screen thumbnail captured with each snapshot, so the menu can show
+ * WHICH moment you're jumping to (THUMB_W x THUMB_H 0x00RRGGBB). */
+#define REWIND_THUMB_W 104
+#define REWIND_THUMB_H 78
+const uint32_t* rewind_snapshot_thumb(int i);
+
 /* Ask for snapshot i (0 = newest) to be restored at the next present —
  * everything newer than it is discarded. */
 void rewind_request_restore(int i);
