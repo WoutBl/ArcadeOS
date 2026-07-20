@@ -450,6 +450,25 @@ int main(void) {
     }
 
     while (arcade_frame(&a)) {
+        /* A game beamed to this console from the LAN? Launch it; the
+         * kernel overlays the sender's live state on its first frame. */
+        {
+            char beamed[16];
+            if (beam_poll(beamed) && beamed[0]) {
+                char bpath[80] = "/games/";
+                strcpy(bpath + 7, beamed);
+                char* bargv[] = { bpath, (char*)0 };
+                int bpid = spawn(bpath, bargv);
+                if (bpid >= 0) {
+                    wait(bpid);
+                    a.pad.buttons = 0xFFFF;
+                    scan_games();
+                }
+                draw_home(&a.screen, selected, last_idx, ticks());
+                continue;
+            }
+        }
+
         if (screen == SCR_HOME) {
             if ((a.pressed & PAD_BTN_DOWN) && num_games > 0) {
                 selected = (selected + 1) % num_games;

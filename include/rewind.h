@@ -67,6 +67,10 @@ void rewind_post_blit(void);
  * shifted after a rewind so games never see time jump. */
 uint32_t rewind_ticks(void);
 
+/* Adopt an external game-visible tick baseline (used by beaming so the
+ * migrated game's SYS_TICKS continues from the sender's value). */
+void rewind_adopt_ticks(uint32_t vticks);
+
 /* SYS_PAD_READ integration: during replay, overwrites *st from the
  * frame log and returns 1; live, records *st and returns 0. */
 int rewind_feed_pad(int index, pad_state_t* st);

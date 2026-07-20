@@ -140,3 +140,11 @@ void surf_draw_text(surface_t* s, int x, int y, const char* str, uint32_t fg, ui
         str++;
     }
 }
+
+/* SYS_BEAM_POLL: fills buf (>=16) with a pending beamed game name.
+ * Returns 1 if a beam is waiting to be launched, 0 otherwise. */
+int beam_poll(char* buf) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(34), "b"(buf) : "memory");
+    return ret;
+}

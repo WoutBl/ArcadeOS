@@ -238,17 +238,30 @@ hardware is still on the list.
     withheld SELECT + the late partner instead of delivering a lethal
     lone SELECT (= quit) to the game.
 
+27. **Game beaming — live migration over the LAN** (July 2026). The
+    ambitious one, and it works. From the system menu's BEAM entry
+    (src/beam.c) a console snapshots the running game's writable pages
+    and CPU register frame, broadcasts an offer, and streams the state
+    over UDP (port 7778, 1 KiB chunks, unique-chunk bitmap so lost
+    datagrams are re-requested not silently dropped). A console idle in
+    the launcher catches the offer (SYS_BEAM_POLL), spawns the same ELF,
+    and at its first SYS_GFX_PRESENT the kernel overlays the beamed
+    pages AND rewrites the syscall's saved registers (RIP/RSP/callee-
+    saved) — so the game resumes at the sender's exact execution point,
+    no dependence on matching call depth. The game CONTINUES on the
+    other machine, same frame, same score, now driven by the second
+    console's player. Verified with two linked QEMU instances: Pong
+    (00-03, ball in rally) and BLASTER (score 100, mid game-over
+    screen) both migrated and stayed live. The determinism the SDK
+    guarantees is what makes moving only the writable pages + registers
+    enough — kernel-level live process migration as a consumer feature,
+    which as far as I know no OS has shipped.
+
 ## Later — ideas no OS has done before
 
 The rewind engine proved the recipe: deterministic SDK games + a
 kernel that owns their memory and inputs = features no game has to
 implement. Same recipe, unexplored directions:
-
-- **Beam a running game to another console.** Pause, snapshot, stream
-  the pages over UDP to a console on the LAN (both volumes carry the
-  same ELF), restore at a present boundary — the game CONTINUES on
-  the other machine, same frame, same score. Kernel-level live
-  process migration as a consumer feature.
 
 - **Ghost replay.** The input log already reconstructs any run.
   Record a best run to disk, then replay it through a second instance

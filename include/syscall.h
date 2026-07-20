@@ -35,6 +35,7 @@
 #define SYS_SOUND_EX    31   /* EBX = sound_req_t*: mixer voices, tones + PCM */
 #define SYS_NET         32   /* EBX = net_req_t*: UDP bind/send/recv (netplay) */
 #define SYS_SESSION     33   /* EBX = session_req_t*: active players (profiles) */
+#define SYS_BEAM_POLL   34   /* EBX = char[16] out: pending beamed game, 1/0 */
 
 /* GDT segment selectors */
 #define GDT_KERNEL_CODE  0x08

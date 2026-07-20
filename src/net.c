@@ -21,6 +21,7 @@
  */
 
 #include "net.h"
+#include "beam.h"
 #include "vga.h"
 #include "serial.h"
 #include "clock.h"
@@ -54,6 +55,7 @@ static uint8_t our_ip[4] = { 10, 0, 2, 86 };
 #define UDP_ECHO_PORT 7
 #define DHCP_CLIENT_PORT 68
 #define DHCP_SERVER_PORT 67
+#define BEAM_PORT 7778
 
 /* When non-NULL, send_ip stamps this source address (DHCP: 0.0.0.0) */
 static const uint8_t* ip_src_override = 0;
@@ -619,7 +621,7 @@ static void handle_icmp(const eth_hdr_t* eth, const ip_hdr_t* ip,
 static void udp_tx(const uint8_t* dst_mac, const uint8_t* dst_ip,
                    uint16_t sport, uint16_t dport,
                    const void* data, uint32_t len) {
-    static uint8_t dgram[sizeof(udp_hdr_t) + UDP_MSG_MAX];
+    static uint8_t dgram[sizeof(udp_hdr_t) + 1100];   /* fits beam chunks */
     udp_hdr_t* udp = (udp_hdr_t*)dgram;
     udp->sport    = htons16(sport);
     udp->dport    = htons16(dport);
@@ -748,6 +750,13 @@ static void handle_udp(const eth_hdr_t* eth, const ip_hdr_t* ip,
         if (dlen > UDP_MSG_MAX) dlen = UDP_MSG_MAX;
         udp_tx(eth->src, ip->src, UDP_ECHO_PORT, htons16(udp->sport),
                data, dlen);
+        return;
+    }
+
+    if (dport == BEAM_PORT) {             /* Game beaming (live migration) */
+        uint32_t src = ((uint32_t)ip->src[0] << 24) | ((uint32_t)ip->src[1] << 16)
+                     | ((uint32_t)ip->src[2] << 8)  |  (uint32_t)ip->src[3];
+        beam_input(src, data, dlen);
         return;
     }
 
@@ -882,6 +891,27 @@ int net_udp_send(uint32_t dst_ip, uint16_t dst_port,
         return -2;              /* Caller retries next frame */
     }
     udp_tx(mac, ip, udp_port, dst_port, buf, len);
+    return 0;
+}
+
+/* Kernel-internal UDP on the beam port (bypasses the game socket): used
+ * by src/beam.c to stream a migrating game. dst_ip is host-order;
+ * 0xFFFFFFFF broadcasts. Bigger payloads than the 512-byte game cap. */
+int net_beam_send(uint32_t dst_ip, const void* buf, uint32_t len) {
+    if (!net_up || len > 1100) return -1;
+
+    uint8_t ip[4] = {
+        (uint8_t)(dst_ip >> 24), (uint8_t)(dst_ip >> 16),
+        (uint8_t)(dst_ip >> 8),  (uint8_t)dst_ip,
+    };
+    if (dst_ip == 0xFFFFFFFFu) {
+        static const uint8_t bcast_mac[6] = { 255, 255, 255, 255, 255, 255 };
+        udp_tx(bcast_mac, ip, BEAM_PORT, BEAM_PORT, buf, len);
+        return 0;
+    }
+    const uint8_t* mac = arp_find(ip);
+    if (!mac) { arp_request(ip); return -2; }
+    udp_tx(mac, ip, BEAM_PORT, BEAM_PORT, buf, len);
     return 0;
 }
 

@@ -26,6 +26,7 @@
 #include "paging.h"
 #include "sysmenu.h"
 #include "rewind.h"
+#include "beam.h"
 #include "session.h"
 
 /*
@@ -84,7 +85,13 @@ void tss_set_kernel_stack(uint64_t stack_top) {
 }
 
 /* ──────── Syscall dispatcher (called from isr_handler via int 0x80) ──────── */
+/* The register frame of the syscall currently being serviced. Beaming
+ * reads it (the paused game's context) and, on the receiver, rewrites
+ * it so a migrated game resumes at the sender's exact RIP/RSP. */
+registers_t* g_user_regs = 0;
+
 static void syscall_handler(registers_t* regs) {
+    g_user_regs = regs;
     switch (regs->eax) {
         case SYS_EXIT:
             /* Halt the current user task */
@@ -324,6 +331,7 @@ static void syscall_handler(registers_t* regs) {
             /* Universal rewind: snapshot/restore at the frame boundary.
              * Runs BEFORE the blit so a rewound frame is what appears. */
             rewind_on_present();
+            beam_on_present();     /* Receive a migrating game (may block) */
             if (rewind_should_blit())
                 gfx_present_buffer((const uint32_t*)(uintptr_t)ptr);
             rewind_post_blit();    /* Scrub hold-loop (may block) */
@@ -557,6 +565,23 @@ static void syscall_handler(registers_t* regs) {
                 regs->eax = 0;
             } else {
                 regs->eax = (uint32_t)-1;
+            }
+            break;
+        }
+
+        case SYS_BEAM_POLL: {
+            /* Launcher: is a beamed game waiting to be spawned? */
+            char* out = (char*)regs->ebx;
+            if (!uwr(out, 16)) { regs->eax = (uint32_t)-1; break; }
+            const char* g = beam_pending_game();
+            if (g) {
+                int i = 0;
+                for (; i < 15 && g[i]; i++) out[i] = g[i];
+                out[i] = '\0';
+                regs->eax = 1;
+            } else {
+                out[0] = '\0';
+                regs->eax = 0;
             }
             break;
         }

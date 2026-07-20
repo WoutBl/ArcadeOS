@@ -4,6 +4,8 @@
 
 #include "sysmenu.h"
 #include "rewind.h"
+#include "beam.h"
+#include "net.h"
 #include "fb.h"
 #include "gamepad.h"
 #include "usb.h"
@@ -36,7 +38,7 @@ static void draw_menu(int row, int gsel, int n_rewind) {
     int grows   = (n_rewind + cols - 1) / cols;
     int w       = cols * TH_W + (cols - 1) * 10 + 32;
     if (w < 336) w = 336;
-    int h       = 96 + 30 + grows * (TH_H + 26) + 30;
+    int h       = 96 + 30 + grows * (TH_H + 26) + 60;   /* +BEAM +QUIT */
     int x       = ((int)fb_width() - w) / 2;
     int y       = ((int)fb_height() - h) / 2;
 
@@ -80,15 +82,24 @@ static void draw_menu(int row, int gsel, int n_rewind) {
     }
     ey += grows * (TH_H + 26);
 
-    /* QUIT */
+    /* BEAM TO LAN */
     if (row == 2) {
         fb_overlay_rect(x + 12, ey - 5, w - 24, 26, 0x2A3C8C);
         fb_overlay_text(x + 20, ey, ">", 0xFFDC50, 2);
     }
-    fb_overlay_text(x + 44, ey, "QUIT TO LAUNCHER",
-                    row == 2 ? 0xFF9078 : 0x96A0C8, 2);
+    fb_overlay_text(x + 44, ey, "BEAM TO ANOTHER CONSOLE",
+                    row == 2 ? 0x78DC96 : 0x96A0C8, 2);
+    ey += 30;
 
-    fb_overlay_text(x + 24, y + h - 18, "PICK A MOMENT TO JUMP BACK TO",
+    /* QUIT */
+    if (row == 3) {
+        fb_overlay_rect(x + 12, ey - 5, w - 24, 26, 0x2A3C8C);
+        fb_overlay_text(x + 20, ey, ">", 0xFFDC50, 2);
+    }
+    fb_overlay_text(x + 44, ey, "QUIT TO LAUNCHER",
+                    row == 3 ? 0xFF9078 : 0x96A0C8, 2);
+
+    fb_overlay_text(x + 24, y + h - 18, "A: SELECT   B: RESUME",
                     0x5A64A0, 1);
 }
 
@@ -134,19 +145,23 @@ void sysmenu_on_present(void) {
         uint16_t pressed = (uint16_t)(p.buttons & ~prev);
         prev = p.buttons;
 
+        /* Rows: 0 CONTINUE, 1 GRID, 2 BEAM, 3 QUIT */
         if (pressed & PAD_BTN_DOWN) {
             if (row == 0)      row = n_rewind ? 1 : 2;
             else if (row == 1) {
                 if (gsel + 3 < n_rewind) gsel += 3;   /* Next grid row */
                 else row = 2;
-            } else row = 0;
+            } else if (row == 2) row = 3;
+            else                 row = 0;
         }
         if (pressed & PAD_BTN_UP) {
-            if (row == 2)      row = n_rewind ? 1 : 0;
+            if (row == 0)      row = 3;
+            else if (row == 3) row = 2;
+            else if (row == 2) row = n_rewind ? 1 : 0;
             else if (row == 1) {
                 if (gsel >= 3) gsel -= 3;
                 else row = 0;
-            } else row = 2;
+            }
         }
         if (row == 1 && (pressed & PAD_BTN_LEFT)  && gsel > 0)            gsel--;
         if (row == 1 && (pressed & PAD_BTN_RIGHT) && gsel < n_rewind - 1) gsel++;
@@ -158,7 +173,12 @@ void sysmenu_on_present(void) {
                 rewind_request_restore(gsel);
                 break;
             }
-            quit_to_launcher();                                  /* No return */
+            if (row == 2) {                                      /* BEAM */
+                if (beam_send_current()) quit_to_launcher();     /* Delivered */
+                prev = 0xFFFF;    /* Repaint the menu, ignore held keys */
+                continue;
+            }
+            quit_to_launcher();                                  /* QUIT, no return */
         }
 
         draw_menu(row, gsel, n_rewind);

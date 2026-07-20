@@ -260,6 +260,10 @@ int rewind_should_blit(void) {
     return !enabled || blit_now;
 }
 
+void rewind_adopt_ticks(uint32_t vticks) {
+    tick_offset = system_ticks - vticks;
+}
+
 uint32_t rewind_ticks(void) {
     if (!enabled || !current_task || current_task->id != owner_id)
         return system_ticks;

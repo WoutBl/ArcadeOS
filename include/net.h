@@ -50,6 +50,9 @@ int net_udp_bind(uint16_t port);
 int net_udp_send(uint32_t dst_ip, uint16_t dst_port,
                  const void* buf, uint32_t len);
 
+/* Kernel-internal beam transport (src/beam.c). */
+int net_beam_send(uint32_t dst_ip, const void* buf, uint32_t len);
+
 /* Dequeue one received datagram (bound port). Returns length, or -1
  * when the queue is empty. src_ip/src_port may be NULL. */
 int net_udp_recv(void* buf, uint32_t maxlen,
