@@ -53,6 +53,10 @@ int session_op(session_req_t* rq);
 /* Poll for a beamed game to launch (launcher only). */
 int beam_poll(char* buf);
 
+/* Attract-mode demos (launcher). */
+int demo_save(const char* name);
+int attract_op(int op, const char* name);
+
 /* Report the current score to the kernel (served by the REST API while
  * the game runs). The SDK calls this automatically via arcade_t.score. */
 void report_score(int score);

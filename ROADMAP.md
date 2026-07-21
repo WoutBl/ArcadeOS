@@ -268,11 +268,6 @@ implement. Same recipe, unexplored directions:
   of the game whose framebuffer is composited translucently over the
   live one — race your own ghost in ANY game, zero game support.
 
-- **Attract mode.** Arcade cabinets demo themselves. The launcher,
-  idle for 60 s, could replay a recorded input log through a game
-  (blits on, inputs from the log) — self-playing demos for every
-  title, recorded by just... playing.
-
 28. **Remote spectating** (July 2026). The REST server (src/net.c)
     grows /api/screen.bmp — the live framebuffer downsampled into a
     120x90 24-bit BMP — and /screen, an auto-refreshing HTML page that
@@ -281,6 +276,20 @@ implement. Same recipe, unexplored directions:
     while a game owns the screen. Verified: the launcher and a live
     BLASTER frame both decode correctly; the smoke test now asserts the
     endpoint returns a real BMP.
+
+29. **Attract mode — self-playing demos** (July 2026). The console
+    demos itself like an arcade cabinet. During normal play the kernel
+    captures the first ~17 s of {pad, ticks} plus the exact seed tick
+    the game read in arcade_init; on exit the launcher saves it as
+    <GAME>.DEM. After 15 s idle at the home screen the launcher spawns
+    a game with a demo and the kernel replays it — feeding the recorded
+    inputs AND ticks, so the deterministic SDK game (owned PRNG seeded
+    from ticks) re-runs the recorded session EXACTLY, display on, at
+    real-time speed. Any real button ends it and drops back to the
+    launcher. Verified: played BLASTER, it saved BLASTER.DEM (27 KB),
+    idle triggered a faithful self-playing replay (score/HI/enemies),
+    and a keypress cancelled it. Every game records its own demo just
+    by being played once.
 
 ## Hardware day
 

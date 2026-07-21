@@ -148,3 +148,17 @@ int beam_poll(char* buf) {
     asm volatile("int $0x80" : "=a"(ret) : "a"(34), "b"(buf) : "memory");
     return ret;
 }
+
+/* SYS_DEMO_SAVE: persist the captured demo of the game named `name`. */
+int demo_save(const char* name) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(35), "b"(name) : "memory");
+    return ret;
+}
+
+/* SYS_ATTRACT: arm a demo (op 0, returns 1 if loaded) or query (op 1). */
+int attract_op(int op, const char* name) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(36), "b"(op), "c"(name) : "memory");
+    return ret;
+}

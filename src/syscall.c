@@ -569,6 +569,28 @@ static void syscall_handler(registers_t* regs) {
             break;
         }
 
+        case SYS_DEMO_SAVE: {
+            /* Launcher: persist the just-played game's captured demo. */
+            const char* name = (const char*)regs->ebx;
+            if (!ustr(name)) { regs->eax = (uint32_t)-1; break; }
+            regs->eax = (uint32_t)rewind_demo_save(name);
+            break;
+        }
+
+        case SYS_ATTRACT: {
+            /* Launcher: op 0 arms a demo (returns 1 if <game>.DEM loaded),
+             * op 1 reports whether attract is still running. */
+            int op = (int)regs->ebx;
+            if (op == 0) {
+                const char* name = (const char*)regs->ecx;
+                if (!ustr(name)) { regs->eax = (uint32_t)-1; break; }
+                regs->eax = (uint32_t)rewind_arm_attract(name);
+            } else {
+                regs->eax = (uint32_t)rewind_attract_active();
+            }
+            break;
+        }
+
         case SYS_BEAM_POLL: {
             /* Launcher: is a beamed game waiting to be spawned? */
             char* out = (char*)regs->ebx;

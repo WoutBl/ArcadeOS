@@ -435,6 +435,9 @@ int main(void) {
     /* Resume on the last-played game */
     int selected = 0;
     int last_idx = -1;
+    unsigned int last_active = ticks();   /* For attract-mode idle timer */
+    int attract_next = 0;                 /* Rotates through demoable games */
+#define ATTRACT_MS 15000                  /* Idle this long -> self-play a demo */
     {
         lastplayed_t lp;
         if (arcade_load("LAUNCH", 0, &lp, sizeof(lp)) == (int)sizeof(lp) &&
@@ -469,7 +472,35 @@ int main(void) {
             }
         }
 
+        /* Any input keeps the console awake (defers attract mode) */
+        if (a.pressed || a.pressed2) last_active = ticks();
+
         if (screen == SCR_HOME) {
+            /* Idle at the home screen: demo a game, arcade-cabinet style.
+             * Try each game in turn until one has a saved .DEM; the
+             * kernel replays it and any button drops back here. */
+            if (num_games > 0 && ticks() - last_active > ATTRACT_MS) {
+                for (int t = 0; t < num_games; t++) {
+                    int gi = (attract_next + t) % num_games;
+                    if (attract_op(0, games[gi].name)) {   /* Armed a demo */
+                        attract_next = gi + 1;
+                        char apath[80] = "/games/";
+                        strcpy(apath + 7, games[gi].name);
+                        char* aargv[] = { apath, (char*)0 };
+                        int apid = spawn(apath, aargv);
+                        if (apid >= 0) {
+                            wait(apid);
+                            a.pad.buttons = 0xFFFF;
+                            scan_games();
+                        }
+                        break;
+                    }
+                }
+                last_active = ticks();     /* Reset whether or not it ran */
+                draw_home(&a.screen, selected, last_idx, ticks());
+                continue;
+            }
+
             if ((a.pressed & PAD_BTN_DOWN) && num_games > 0) {
                 selected = (selected + 1) % num_games;
                 sfx_move();
@@ -508,7 +539,9 @@ int main(void) {
                 if (pid >= 0) {
                     wait(pid);          /* Blocked until the game exits */
                     a.pad.buttons = 0xFFFF;  /* Swallow held buttons */
+                    demo_save(games[selected].name);  /* Capture an attract demo */
                     scan_games();
+                    last_active = ticks();
                 }
             }
 

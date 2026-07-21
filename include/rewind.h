@@ -71,6 +71,11 @@ uint32_t rewind_ticks(void);
  * migrated game's SYS_TICKS continues from the sender's value). */
 void rewind_adopt_ticks(uint32_t vticks);
 
+/* ── Attract mode: self-playing demos ── */
+int rewind_demo_save(const char* elfbase);    /* save capture as <base>.DEM */
+int rewind_arm_attract(const char* elfbase);  /* load <base>.DEM + arm; 1/0 */
+int rewind_attract_active(void);
+
 /* SYS_PAD_READ integration: during replay, overwrites *st from the
  * frame log and returns 1; live, records *st and returns 0. */
 int rewind_feed_pad(int index, pad_state_t* st);

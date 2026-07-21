@@ -32,6 +32,7 @@
 #include "gamepad.h"
 #include "clock.h"
 #include "sysmenu.h"
+#include "fat32.h"
 
 #define REWIND_SLOTS      6
 #define REWIND_MAX_PAGES  1024          /* 4 MiB per slot */
@@ -70,6 +71,75 @@ static user_page_t pages[REWIND_MAX_PAGES];
 static int         npages = 0;
 
 static frame_rec_t recs[RECORDS];
+
+/* ──────── Attract mode (self-playing demos) ──────────────────────────
+ *
+ * The console demos itself when idle. During normal play the kernel
+ * captures the first DEMO_FRAMES of {pad, vticks} plus the seed tick the
+ * game read in arcade_init; on exit that becomes <GAME>.DEM on the
+ * volume. Attract replays it into a fresh instance of the same game,
+ * feeding the recorded inputs AND ticks — because SDK games are
+ * deterministic (owned PRNG seeded from ticks()), reproducing the seed
+ * tick + per-frame inputs re-runs the recorded session EXACTLY, with
+ * the display on and at real-time speed. Any real button ends it.
+ */
+#define DEMO_FRAMES 1024
+#define DEMO_MIN    180              /* Need ~3 s to bother saving */
+#define DEMO_MAGIC  0x44454D31u      /* 'DEM1' */
+
+static frame_rec_t demo_cap[DEMO_FRAMES];   /* Captured during live play */
+static int         demo_cap_n;
+static int         cap_active;
+static uint32_t    demo_seed;               /* Seed tick this game read */
+static uint32_t    g_last_tick;             /* Last SYS_TICKS returned live */
+
+static frame_rec_t demo_play[DEMO_FRAMES];  /* Loaded demo being replayed */
+static int         demo_play_n;
+static uint32_t    attract_seed;
+static char        attract_game[24];        /* Basename of the attract game */
+static int         attract_active;
+static int         attract_play;            /* 0 = pre-first-present, 1 = playing */
+static int         attract_cursor;
+static volatile int attract_cancel;
+static uint32_t    attract_owner;
+static uint32_t    attract_deadline;
+
+typedef struct { uint32_t magic, seed, nframes; } demo_hdr_t;
+static uint8_t demo_io[sizeof(demo_hdr_t) + DEMO_FRAMES * sizeof(frame_rec_t)];
+
+static const char* rw_basename(const char* p) {
+    const char* b = p;
+    for (const char* q = p; *q; q++) if (*q == '/') b = q + 1;
+    return b;
+}
+
+/* "PONG.ELF" -> "PONG.DEM" (in place-ish, into out[16]) */
+static void demo_name(const char* elfbase, char* out) {
+    int i = 0;
+    for (; elfbase[i] && elfbase[i] != '.' && i < 8; i++) out[i] = elfbase[i];
+    out[i++] = '.'; out[i++] = 'D'; out[i++] = 'E'; out[i++] = 'M';
+    out[i] = '\0';
+}
+
+static int attract_is_current(void) {
+    return attract_active && current_task &&
+           strcmp(rw_basename(current_task->name), attract_game) == 0;
+}
+
+/* End the attract session and drop the game back to the launcher. */
+static void attract_end(void) {
+    attract_active = 0;
+    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+    terminal_writestring("[ATTRACT] demo ended\n");
+    if (!current_task) return;
+    current_task->state = TASK_DEAD;
+    for (int i = 0; i < num_tasks; i++)
+        if (tasks[i].state == TASK_BLOCKED && tasks[i].wait_pid == current_task->id) {
+            tasks[i].state = TASK_READY;
+            tasks[i].wait_pid = 0;
+        }
+    for (;;) { schedule(); asm volatile("sti\nhlt"); }
+}
 
 #define MODE_LIVE   0
 #define MODE_REPLAY 1
@@ -265,22 +335,44 @@ void rewind_adopt_ticks(uint32_t vticks) {
 }
 
 uint32_t rewind_ticks(void) {
+    /* Attract replay: feed the recorded seed tick (pre-play, so
+     * arcade_init seeds the PRNG identically) then per-frame vticks. */
+    if (attract_is_current())
+        return attract_play ? demo_play[attract_cursor].vticks : attract_seed;
+
+    uint32_t v;
     if (!enabled || !current_task || current_task->id != owner_id)
-        return system_ticks;
-    if (mode == MODE_REPLAY)
-        return recs[replay_cursor % RECORDS].vticks;
-    return system_ticks - tick_offset;
+        v = system_ticks;
+    else if (mode == MODE_REPLAY)
+        v = recs[replay_cursor % RECORDS].vticks;
+    else
+        v = system_ticks - tick_offset;
+    /* Track the last tick handed out: at a game's first present this is
+     * the seed it read in arcade_init (nothing else runs meanwhile). */
+    g_last_tick = v;
+    return v;
 }
 
 int rewind_feed_pad(int index, pad_state_t* st) {
-    if (!enabled || !current_task || current_task->id != owner_id) return 0;
     if (index < 0 || index > 1) return 0;
+
+    /* Attract replay: hand the game its recorded input; a real button
+     * on the actual pad ends the demo. */
+    if (attract_is_current()) {
+        if (index == 0 && (st->buttons != 0)) attract_cancel = 1;
+        *st = demo_play[attract_play ? attract_cursor : 0].pad[index];
+        return 1;
+    }
+
+    if (!enabled || !current_task || current_task->id != owner_id) return 0;
 
     if (mode == MODE_REPLAY) {
         *st = recs[replay_cursor % RECORDS].pad[index];
         return 1;
     }
     recs[present_counter % RECORDS].pad[index] = *st;
+    if (cap_active && present_counter < DEMO_FRAMES)
+        demo_cap[present_counter].pad[index] = *st;
     return 0;
 }
 
@@ -300,8 +392,32 @@ void rewind_on_present(void) {
         mode = MODE_LIVE;
         scrubbing = arrived = just_restored = 0;
         recs[0].vticks = system_ticks;
-        /* Snapshot #0 right away: rewinding to "just started" works */
+
+        /* Is this the game a queued attract demo is waiting for? */
+        if (attract_active && !attract_play &&
+            strcmp(rw_basename(current_task->name), attract_game) == 0) {
+            attract_play   = 1;             /* Switch from seed to per-frame */
+            attract_cursor = 0;
+            attract_owner  = current_task->id;
+            cap_active     = 0;
+        } else {
+            /* Fresh normal play: start capturing a demo of this run */
+            cap_active = 1;
+            demo_cap_n = 1;
+            demo_cap[0].vticks = system_ticks;
+            demo_seed  = g_last_tick;       /* Seed the game just read */
+        }
+
         take_snapshot();
+        return;
+    }
+
+    /* Attract replay: advance the demo, blits ON, real-time */
+    if (attract_active && attract_play && current_task->id == attract_owner) {
+        attract_cursor++;
+        if (attract_cursor >= demo_play_n || attract_cancel ||
+            system_ticks > attract_deadline)
+            attract_end();                  /* No return */
         return;
     }
 
@@ -320,6 +436,10 @@ void rewind_on_present(void) {
     /* MODE_LIVE */
     present_counter++;
     recs[present_counter % RECORDS].vticks = system_ticks - tick_offset;
+    if (cap_active && present_counter < DEMO_FRAMES) {
+        demo_cap[present_counter].vticks = system_ticks - tick_offset;
+        demo_cap_n = present_counter + 1;
+    }
 
     /* Chord (raw — the pad filter hides it from the game): open a
      * scrub session. The hold loop runs after this frame's blit. */
@@ -464,3 +584,64 @@ int rewind_filter_pad(int index, pad_state_t* st) {
     }
     return 0;
 }
+
+/* ──────── Attract mode public API (see rewind.h) ──────── */
+
+int rewind_demo_save(const char* elfbase) {
+    if (demo_cap_n < DEMO_MIN) return 0;
+    demo_hdr_t* h = (demo_hdr_t*)demo_io;
+    h->magic   = DEMO_MAGIC;
+    h->seed    = demo_seed;
+    h->nframes = (uint32_t)demo_cap_n;
+    memcpy(demo_io + sizeof(demo_hdr_t), demo_cap,
+           (uint32_t)demo_cap_n * sizeof(frame_rec_t));
+
+    char name[16];
+    demo_name(rw_basename(elfbase), name);
+    uint32_t bytes = sizeof(demo_hdr_t) + (uint32_t)demo_cap_n * sizeof(frame_rec_t);
+    int r = fat32_save(name, demo_io, bytes);
+    if (r == 0) {
+        terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+        terminal_writestring("[ATTRACT] saved demo ");
+        terminal_writestring(name);
+        terminal_writestring("\n");
+    }
+    return r == 0;
+}
+
+int rewind_arm_attract(const char* elfbase) {
+    char name[16];
+    demo_name(rw_basename(elfbase), name);
+
+    int n = fat32_load(name, demo_io, sizeof(demo_io));
+    if (n < (int)sizeof(demo_hdr_t)) return 0;
+    demo_hdr_t* h = (demo_hdr_t*)demo_io;
+    if (h->magic != DEMO_MAGIC || h->nframes == 0 || h->nframes > DEMO_FRAMES)
+        return 0;
+    if ((uint32_t)n < sizeof(demo_hdr_t) + h->nframes * sizeof(frame_rec_t))
+        return 0;
+
+    demo_play_n = (int)h->nframes;
+    attract_seed = h->seed;
+    memcpy(demo_play, demo_io + sizeof(demo_hdr_t),
+           h->nframes * sizeof(frame_rec_t));
+
+    int i = 0;
+    const char* b = rw_basename(elfbase);
+    for (; b[i] && i < 23; i++) attract_game[i] = b[i];
+    attract_game[i] = '\0';
+
+    attract_active   = 1;
+    attract_play     = 0;              /* Pre-play: feed the seed tick */
+    attract_cursor   = 0;
+    attract_cancel   = 0;
+    attract_deadline = system_ticks + (uint32_t)demo_play_n * 20 + 6000;
+
+    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+    terminal_writestring("[ATTRACT] armed ");
+    terminal_writestring(attract_game);
+    terminal_writestring("\n");
+    return 1;
+}
+
+int rewind_attract_active(void) { return attract_active; }
