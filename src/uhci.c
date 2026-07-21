@@ -129,12 +129,18 @@ static void uhci_delay(uint32_t loops) {
         ;
 }
 
-/* Millisecond wait that works in both boot and syscall context:
- * enable IRQs so the PIT keeps ticking, halt between ticks. */
+/* Millisecond wait for boot + syscall context. Busy-polls the PIT with
+ * IRQs enabled, but NEVER hlt-waits: a bounded spin guard guarantees it
+ * returns even if timer ticks stall, so a USB device present at boot
+ * can't wedge enumeration. (hlt here deadlocked on some hosts whose PIT
+ * IRQ timing during early init differs — headless has no device so the
+ * path was never exercised there.) */
 static void uhci_wait_ms(uint32_t ms) {
+    asm volatile("sti");
     uint32_t target = system_ticks + ms;
-    while (system_ticks < target)
-        asm volatile("sti\nhlt");
+    uint32_t guard  = 500000000u;
+    while (system_ticks < target && --guard)
+        asm volatile("pause");
 }
 
 static uint16_t uhci_read16(usb_controller_t* hc, uint16_t reg) {
@@ -209,8 +215,13 @@ static int uhci_control(usb_controller_t* hc, uint8_t addr, int low_speed,
     /* Hand the chain to the controller */
     qh_ctrl->element_link = (uint32_t)(uintptr_t)&ctrl_tds[0];
 
-    /* Poll for completion (element link reaches TERMINATE) */
+    /* Poll for completion (element link reaches TERMINATE). Bounded by
+     * both a tick deadline and a spin guard, and busy-waits rather than
+     * hlt-waits, so this can never hang the boot even if timer ticks
+     * stall (see uhci_wait_ms). */
+    asm volatile("sti");
     uint32_t deadline = system_ticks + 500;   /* 500 ms is generous */
+    uint32_t guard    = 500000000u;
     while (!(qh_ctrl->element_link & UHCI_LINK_TERMINATE)) {
         /* Check the in-flight TD for a hard error */
         uint32_t elem = qh_ctrl->element_link & ~0xFu;
@@ -222,11 +233,11 @@ static int uhci_control(usb_controller_t* hc, uint8_t addr, int low_speed,
                 return -1;
             }
         }
-        if (system_ticks >= deadline) {
+        if (system_ticks >= deadline || --guard == 0) {
             qh_ctrl->element_link = UHCI_LINK_TERMINATE;
             return -1;
         }
-        asm volatile("sti\nhlt");
+        asm volatile("pause");
     }
 
     /* Verify every TD retired cleanly and total the data stage length */

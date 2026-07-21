@@ -138,10 +138,14 @@ static inline void wr64(volatile uint32_t* r, uint64_t v) {
     r[1] = (uint32_t)(v >> 32);
 }
 
+/* Busy-wait (never hlt): a spin guard bounds it so USB bring-up can't
+ * wedge the boot if timer ticks stall on a given host (see uhci_wait_ms). */
 static void xhci_wait_ms(uint32_t ms) {
+    asm volatile("sti");
     uint32_t target = system_ticks + ms;
-    while (system_ticks < target)
-        asm volatile("sti\nhlt");
+    uint32_t guard  = 500000000u;
+    while (system_ticks < target && --guard)
+        asm volatile("pause");
 }
 
 static void ring_init(xhci_ring_t* r, void* mem, uint32_t ntrbs) {
@@ -205,11 +209,14 @@ static void handle_transfer_event(const xhci_trb_t* ev);
  * code, or -1 on timeout.
  */
 static int wait_event(uint32_t type, uint64_t match_trb, xhci_trb_t* out) {
+    asm volatile("sti");
     uint32_t deadline = system_ticks + 1000;
+    uint32_t guard    = 500000000u;
     xhci_trb_t ev;
-    while (system_ticks < deadline) {
+    while (system_ticks < deadline && guard) {
         if (!event_poll(&ev)) {
-            asm volatile("sti\nhlt");
+            guard--;
+            asm volatile("pause");
             continue;
         }
         uint32_t ev_type = (ev.d3 >> 10) & 0x3F;
@@ -508,11 +515,13 @@ static void xhci_check_ports(usb_controller_t* hc) {
          * adjacent W1C bits by not writing them back as set. */
         if (!(sc & PORTSC_PED)) {
             wr(op + XHCI_PORTSC(p) / 4, (sc & 0x0E00C3E0u) | PORTSC_PR);
+            asm volatile("sti");
             uint32_t deadline = system_ticks + 200;
-            while (system_ticks < deadline) {
+            uint32_t guard    = 500000000u;
+            while (system_ticks < deadline && --guard) {
                 sc = rd(op + XHCI_PORTSC(p) / 4);
                 if (sc & PORTSC_PRC) break;
-                asm volatile("sti\nhlt");
+                asm volatile("pause");
             }
             wr(op + XHCI_PORTSC(p) / 4,
                (sc & 0x0E00C3E0u) | PORTSC_PRC | PORTSC_CSC);
@@ -566,14 +575,18 @@ int xhci_init(usb_controller_t* hc) {
 
     /* Halt + reset the controller */
     wr(op + XHCI_USBCMD / 4, rd(op + XHCI_USBCMD / 4) & ~CMD_RUN);
+    /* Spin guards (in addition to the tick deadline) so a stalled timer
+     * can't hang controller reset on real hardware. */
     uint32_t deadline = system_ticks + 100;
-    while (!(rd(op + XHCI_USBSTS / 4) & STS_HCH) && system_ticks < deadline)
+    uint32_t g = 500000000u;
+    while (!(rd(op + XHCI_USBSTS / 4) & STS_HCH) && system_ticks < deadline && --g)
         ;
     wr(op + XHCI_USBCMD / 4, CMD_HCRST);
-    deadline = system_ticks + 500;
-    while ((rd(op + XHCI_USBCMD / 4) & CMD_HCRST) && system_ticks < deadline)
+    deadline = system_ticks + 500; g = 500000000u;
+    while ((rd(op + XHCI_USBCMD / 4) & CMD_HCRST) && system_ticks < deadline && --g)
         ;
-    while ((rd(op + XHCI_USBSTS / 4) & STS_CNR) && system_ticks < deadline)
+    g = 500000000u;
+    while ((rd(op + XHCI_USBSTS / 4) & STS_CNR) && system_ticks < deadline && --g)
         ;
     if (rd(op + XHCI_USBCMD / 4) & CMD_HCRST) {
         terminal_writestring("[XHCI] Controller reset timed out\n");
