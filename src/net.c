@@ -155,7 +155,7 @@ static struct {
 static uint32_t udp_head = 0, udp_tail = 0;   /* tail=write, head=read */
 
 /* Response body staging (the log endpoint dominates the size) */
-static char body_buf[40960];
+static char body_buf[320 * 240 * 3 + 512];   /* also holds a 320x240 BMP */
 static char head_buf[256];
 
 static int net_up = 0;
@@ -463,12 +463,12 @@ static uint32_t build_index(char* p0) {
  * read is harmless while a game owns the screen — worst case a torn
  * frame, which nobody watching a demo will notice.
  */
-#define SPEC_W 120
-#define SPEC_H 90
+#define SPEC_W 320
+#define SPEC_H 240
 
 static uint32_t build_screen(char* p0) {
     uint8_t* out = (uint8_t*)p0;
-    uint32_t rowbytes = SPEC_W * 3;              /* 360, already 4-aligned */
+    uint32_t rowbytes = SPEC_W * 3;              /* 960, already 4-aligned */
     uint32_t imgsize  = rowbytes * SPEC_H;
     uint32_t filesize = 54 + imgsize;
 
@@ -490,14 +490,32 @@ static uint32_t build_screen(char* p0) {
         const uint32_t* fb = fb_ptr();
         uint32_t pitch = fb_pitch() / 4;
         uint32_t sw = fb_width(), sh = fb_height();
-        for (int r = 0; r < SPEC_H; r++) {       /* BMP is bottom-up */
-            uint32_t sy = (uint32_t)(SPEC_H - 1 - r) * sh / SPEC_H;
-            uint8_t* line = px + (uint32_t)r * rowbytes;
+        for (int dy = 0; dy < SPEC_H; dy++) {
+            /* Average the source block each dest pixel covers — proper
+             * anti-aliasing, so shrunk text stays legible instead of
+             * dropping to random single pixels (640x480 -> exact 2x2). */
+            uint32_t sy0 = (uint32_t)dy * sh / SPEC_H;
+            uint32_t sy1 = (uint32_t)(dy + 1) * sh / SPEC_H;
+            if (sy1 <= sy0) sy1 = sy0 + 1;
+            uint8_t* line = px + (uint32_t)(SPEC_H - 1 - dy) * rowbytes; /* bottom-up */
             for (int dx = 0; dx < SPEC_W; dx++) {
-                uint32_t c = fb[sy * pitch + ((uint32_t)dx * sw / SPEC_W)];
-                *line++ = (uint8_t)(c & 0xFF);          /* B */
-                *line++ = (uint8_t)((c >> 8) & 0xFF);   /* G */
-                *line++ = (uint8_t)((c >> 16) & 0xFF);  /* R */
+                uint32_t sx0 = (uint32_t)dx * sw / SPEC_W;
+                uint32_t sx1 = (uint32_t)(dx + 1) * sw / SPEC_W;
+                if (sx1 <= sx0) sx1 = sx0 + 1;
+                uint32_t R = 0, G = 0, B = 0, cnt = 0;
+                for (uint32_t yy = sy0; yy < sy1; yy++) {
+                    const uint32_t* row = fb + yy * pitch;
+                    for (uint32_t xx = sx0; xx < sx1; xx++) {
+                        uint32_t c = row[xx];
+                        R += (c >> 16) & 0xFF;
+                        G += (c >> 8) & 0xFF;
+                        B += c & 0xFF;
+                        cnt++;
+                    }
+                }
+                *line++ = (uint8_t)(B / cnt);
+                *line++ = (uint8_t)(G / cnt);
+                *line++ = (uint8_t)(R / cnt);
             }
         }
     }
