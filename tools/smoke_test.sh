@@ -16,6 +16,7 @@ set -u
 IMG=arcadeos.img
 SERIAL=serial-smoke.log
 MON=qemu-smoke.sock
+SPEC_BMP=screen-smoke.bmp
 API=http://localhost:8080
 QEMU_PID=""
 
@@ -29,7 +30,7 @@ fail() {
 
 cleanup() {
     [ -n "$QEMU_PID" ] && kill "$QEMU_PID" 2>/dev/null
-    rm -f "$MON"
+    rm -f "$MON" "$SPEC_BMP"
 }
 trap cleanup EXIT
 
@@ -82,6 +83,12 @@ curl -sf --max-time 5 "$API/api/games"  | grep -q 'PONG.ELF' \
     || fail "/api/games missing PONG.ELF"
 curl -sf --max-time 5 "$API/api/scores" >/dev/null \
     || fail "/api/scores unreachable"
+
+# 2c. Remote spectating: /api/screen.bmp must return a real BMP.
+curl -sf --max-time 6 "$API/api/screen.bmp" -o "$SPEC_BMP" \
+    || fail "/api/screen.bmp unreachable"
+head -c2 "$SPEC_BMP" | grep -q "BM" \
+    || fail "/api/screen.bmp is not a BMP"
 
 # 2b. UDP echo service (proves the netplay datagram path both ways).
 # python3 instead of nc -u: BSD nc exits before reading the reply.

@@ -273,8 +273,14 @@ implement. Same recipe, unexplored directions:
   (blits on, inputs from the log) — self-playing demos for every
   title, recorded by just... playing.
 
-- **Remote spectating.** /api/screen serving downscaled BMP frames —
-  watch someone's run live in a browser tab from another room.
+28. **Remote spectating** (July 2026). The REST server (src/net.c)
+    grows /api/screen.bmp — the live framebuffer downsampled into a
+    120x90 24-bit BMP — and /screen, an auto-refreshing HTML page that
+    shows it. Anyone on the LAN can watch the console in a browser tab
+    (or `curl localhost:8080/api/screen.bmp`). Read-only and harmless
+    while a game owns the screen. Verified: the launcher and a live
+    BLASTER frame both decode correctly; the smoke test now asserts the
+    endpoint returns a real BMP.
 
 ## Hardware day
 

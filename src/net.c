@@ -21,6 +21,7 @@
  */
 
 #include "net.h"
+#include "fb.h"
 #include "beam.h"
 #include "vga.h"
 #include "serial.h"
@@ -450,7 +451,70 @@ static uint32_t build_scores(char* p0) {
 
 static uint32_t build_index(char* p0) {
     char* p = p0;
-    p = sappend(p, "{\"name\":\"ArcadeOS REST API\",\"endpoints\":[\"/api/status\",\"/api/games\",\"/api/scores\",\"/api/log\"]}\n");
+    p = sappend(p, "{\"name\":\"ArcadeOS REST API\",\"endpoints\":[\"/api/status\",\"/api/games\",\"/api/scores\",\"/api/log\",\"/api/screen.bmp\",\"/screen\"]}\n");
+    return (uint32_t)(p - p0);
+}
+
+/* ──────── Remote spectating ────────
+ *
+ * /api/screen.bmp downsamples the live framebuffer into a small 24-bit
+ * BMP (bottom-up, BGR) so anyone on the LAN can watch the console in a
+ * browser tab. /screen wraps it in an auto-refreshing HTML page. The
+ * read is harmless while a game owns the screen — worst case a torn
+ * frame, which nobody watching a demo will notice.
+ */
+#define SPEC_W 120
+#define SPEC_H 90
+
+static uint32_t build_screen(char* p0) {
+    uint8_t* out = (uint8_t*)p0;
+    uint32_t rowbytes = SPEC_W * 3;              /* 360, already 4-aligned */
+    uint32_t imgsize  = rowbytes * SPEC_H;
+    uint32_t filesize = 54 + imgsize;
+
+    memset(out, 0, 54);
+    out[0] = 'B'; out[1] = 'M';
+    out[2]  = (uint8_t)filesize; out[3] = (uint8_t)(filesize >> 8);
+    out[4]  = (uint8_t)(filesize >> 16); out[5] = (uint8_t)(filesize >> 24);
+    out[10] = 54;                                /* Pixel data offset */
+    out[14] = 40;                                /* Info header size */
+    out[18] = (uint8_t)SPEC_W; out[19] = (uint8_t)(SPEC_W >> 8);
+    out[22] = (uint8_t)SPEC_H; out[23] = (uint8_t)(SPEC_H >> 8);
+    out[26] = 1;                                 /* Planes */
+    out[28] = 24;                                /* Bits per pixel */
+    out[34] = (uint8_t)imgsize; out[35] = (uint8_t)(imgsize >> 8);
+    out[36] = (uint8_t)(imgsize >> 16);
+
+    uint8_t* px = out + 54;
+    if (fb_available()) {
+        const uint32_t* fb = fb_ptr();
+        uint32_t pitch = fb_pitch() / 4;
+        uint32_t sw = fb_width(), sh = fb_height();
+        for (int r = 0; r < SPEC_H; r++) {       /* BMP is bottom-up */
+            uint32_t sy = (uint32_t)(SPEC_H - 1 - r) * sh / SPEC_H;
+            uint8_t* line = px + (uint32_t)r * rowbytes;
+            for (int dx = 0; dx < SPEC_W; dx++) {
+                uint32_t c = fb[sy * pitch + ((uint32_t)dx * sw / SPEC_W)];
+                *line++ = (uint8_t)(c & 0xFF);          /* B */
+                *line++ = (uint8_t)((c >> 8) & 0xFF);   /* G */
+                *line++ = (uint8_t)((c >> 16) & 0xFF);  /* R */
+            }
+        }
+    }
+    return filesize;
+}
+
+static uint32_t build_spectate(char* p0) {
+    char* p = p0;
+    p = sappend(p,
+        "<!doctype html><meta charset=utf-8><title>ArcadeOS</title>"
+        "<style>body{background:#0a0c22;margin:0;display:flex;height:100vh;"
+        "align-items:center;justify-content:center}"
+        "img{image-rendering:pixelated;width:min(96vw,96vh*1.333);"
+        "border:2px solid #5064ff;border-radius:8px}</style>"
+        "<img id=s><script>"
+        "function u(){document.getElementById('s').src='/api/screen.bmp?'+Date.now()}"
+        "setInterval(u,500);u()</script>");
     return (uint32_t)(p - p0);
 }
 
@@ -462,6 +526,14 @@ static uint32_t http_route(const char* path, const char** ctype, int* status) {
     if (strcmp(path, "/api/status") == 0)  return build_status(body_buf);
     if (strcmp(path, "/api/games") == 0)   return build_games(body_buf);
     if (strcmp(path, "/api/scores") == 0)  return build_scores(body_buf);
+    if (strcmp(path, "/api/screen.bmp") == 0) {
+        *ctype = "image/bmp";
+        return build_screen(body_buf);
+    }
+    if (strcmp(path, "/screen") == 0) {
+        *ctype = "text/html";
+        return build_spectate(body_buf);
+    }
     if (strcmp(path, "/api/log") == 0) {
         *ctype = "text/plain";
         int n = klog_read(body_buf, sizeof(body_buf) - 1);
@@ -479,7 +551,7 @@ static void http_respond(void) {
     const char* q = conn.req;
     int is_get = (conn.req_len >= 4 && strncmp(q, "GET ", 4) == 0);
     q += 4;
-    while (is_get && *q && *q != ' ' && *q != '\r' && n < sizeof(path) - 1)
+    while (is_get && *q && *q != ' ' && *q != '?' && *q != '\r' && n < sizeof(path) - 1)
         path[n++] = *q++;
     path[n] = '\0';
 
