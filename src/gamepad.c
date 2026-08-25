@@ -249,9 +249,10 @@ int gamepad_source_connected(int source) {
     return raw[source].connected;
 }
 
-uint16_t gamepad_any_latched(void) {
+uint16_t gamepad_unassigned_latched(void) {
     uint16_t b = 0;
     for (int s = 0; s < GAMEPAD_NUM_SOURCES; s++) {
+        if (assignment[s] >= 0) continue;   /* Already covered by its slot's own edge detection */
         b |= src_latch[s];
         src_latch[s] = 0;
     }

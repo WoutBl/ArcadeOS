@@ -342,6 +342,7 @@ static void draw_scores(surface_t* s) {
  * second player. */
 
 static int ctrl_sel = 0;
+static unsigned int ctrl_last_action = 0;   /* ticks() of the last accepted input */
 
 static void draw_controllers(surface_t* s) {
     pad_assign_req_t rq;
@@ -719,13 +720,29 @@ int main(void) {
         else if (screen == SCR_CONTROLLERS) {
             /* This screen's whole job is reassigning who's P1/P2, so
              * it must stay navigable no matter what: a.pressed2 covers
-             * a source currently sitting on P2, and any_pressed covers
-             * one that's fully unassigned (gamepad_get_state() never
-             * delivers those to any slot at all — see its comment). */
+             * a source currently sitting on P2, and unassigned_pressed
+             * covers one that's fully unassigned (gamepad_get_state()
+             * never delivers those to any slot at all). Deliberately
+             * NOT ORing in some broader "any latch fired" signal here —
+             * that would double-fire on a held key's typematic repeat
+             * for whichever source IS already assigned, since only the
+             * per-slot path (a.pressed/a.pressed2) has the frame-to-
+             * frame memory to tell "still held" apart from "pressed
+             * again". */
             pad_assign_req_t rq;
             rq.op = PAD_ASSIGN_OP_LIST;
             pad_assign_op(&rq);
-            uint16_t pressed = (uint16_t)(a.pressed | a.pressed2 | rq.any_pressed);
+            uint16_t pressed = (uint16_t)(a.pressed | a.pressed2 | rq.unassigned_pressed);
+
+            /* Debounce: a single tap can still surface as more than one
+             * press edge here (a key held just a little too long, chord
+             * timing jitter across the two pad slots, ...) — cap this
+             * screen's own reactions to one every 200 ms so a click
+             * can't skip past the row or slot you actually meant to land
+             * on. Doesn't apply anywhere else; normal gameplay screens
+             * want every edge. */
+            if (pressed && ticks() - ctrl_last_action < 200) pressed = 0;
+            if (pressed) ctrl_last_action = ticks();
 
             if (pressed & PAD_BTN_DOWN) { ctrl_sel = (ctrl_sel + 1) % PAD_NUM_SOURCES; sfx_move(); }
             if (pressed & PAD_BTN_UP)   { ctrl_sel = (ctrl_sel + PAD_NUM_SOURCES - 1) % PAD_NUM_SOURCES; sfx_move(); }

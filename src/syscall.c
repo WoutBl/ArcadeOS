@@ -582,7 +582,7 @@ static void syscall_handler(registers_t* regs) {
                     rq->slot[i]      = (int8_t)gamepad_assignment(i);
                     gamepad_source_label(i, rq->label[i], PAD_SOURCE_LABEL_LEN);
                 }
-                rq->any_pressed = gamepad_any_latched();
+                rq->unassigned_pressed = gamepad_unassigned_latched();
                 regs->eax = 0;
             } else if (rq->op == PAD_ASSIGN_OP_SET) {
                 gamepad_assign((int)rq->set_source, (int)rq->set_slot);

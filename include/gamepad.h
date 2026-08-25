@@ -79,16 +79,21 @@ int  gamepad_assignment(int source);
 
 int  gamepad_source_connected(int source);
 
-/* OR of every source's press-edge latch, source-assignment be damned,
- * clearing them as it goes — a catch-all so the controller-assignment
- * screen is always escapable. Sources feeding a player slot are
- * already drained into that slot's gamepad_get_state() by the time
- * this runs (once per frame, same as any other pad read), so in
- * practice this only ever reports presses from a FULLY UNASSIGNED
- * source, which gamepad_get_state() never delivers to anyone —
- * without it, unassigning your only working controller would strand
- * it with no way to reassign itself back. */
-uint16_t gamepad_any_latched(void);
+/* OR of every UNASSIGNED source's press-edge latch, clearing them as
+ * it goes — a catch-all so the controller-assignment screen is always
+ * escapable even after fully unassigning your only working source
+ * (gamepad_get_state() never delivers an unassigned source's input to
+ * anyone, so without this there'd be no way to reassign it back).
+ *
+ * Deliberately skips any source that's currently feeding a player
+ * slot: that source's presses are already correctly edge-detected via
+ * that slot's own gamepad_get_state()/arcade_frame() (which compares
+ * against last frame's state, so a held key's typematic repeat can't
+ * re-trigger it). This function has no such memory — it's a raw latch
+ * drain, not an edge detector — so folding an already-assigned
+ * source's latch into it as well would re-report the SAME held key
+ * on every repeat scancode, one extra "press" per repeat tick. */
+uint16_t gamepad_unassigned_latched(void);
 
 /* Copies a short display label ("KEYBOARD A", "USB PAD 1", ...) for
  * 'source' into 'out' (a NUL-terminated string of at most cap-1 chars). */

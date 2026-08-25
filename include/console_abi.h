@@ -116,10 +116,11 @@ typedef struct {
     uint8_t  connected[PAD_NUM_SOURCES];
     int8_t   slot[PAD_NUM_SOURCES];             /* -1 = unassigned */
     char     label[PAD_NUM_SOURCES][PAD_SOURCE_LABEL_LEN];
-    /* PAD_ASSIGN_OP_LIST also drains gamepad_any_latched() here — see
-     * its comment; the assignment screen ORs this into its own input
-     * so a fully-unassigned source can still reassign itself back. */
-    uint16_t any_pressed;
+    /* PAD_ASSIGN_OP_LIST also drains gamepad_unassigned_latched() here
+     * — see its comment; the assignment screen ORs this into its own
+     * input so a fully-unassigned source can still reassign itself
+     * back, without double-firing on an already-assigned one. */
+    uint16_t unassigned_pressed;
     /* PAD_ASSIGN_OP_SET input */
     int32_t  set_source;
     int32_t  set_slot;
