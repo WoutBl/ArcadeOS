@@ -241,14 +241,26 @@ void arcade_builder_run(const builder_game_t* cfg) {
                     if (lvl->entities[j].role != ROLE_PLAYER || !ents[j].active) continue;
                     if (!arcade_entity_overlap(e, &ents[j])) continue;
 
+                    /* A silent no-op off a USB pad — see arcade_rumble(). */
+                    int hit_player = lvl->entities[j].player_index;
                     switch (be->on_player_hit.effect) {
-                    case FX_SCORE:     score += be->on_player_hit.amount; sfx_score(); break;
-                    case FX_LOSE_LIFE: lives--; sfx_lose(); break;
+                    case FX_SCORE:
+                        score += be->on_player_hit.amount; sfx_score();
+                        arcade_rumble(hit_player, 90, 40);
+                        break;
+                    case FX_LOSE_LIFE:
+                        lives--; sfx_lose();
+                        arcade_rumble(hit_player, 200, 150);
+                        break;
                     case FX_WIN:
                         if (cur_level + 1 < cfg->num_levels) { transition = LEVEL_TRANSITION_FRAMES; sfx_score(); }
                         else                                  { ended = 1; won = 1; }
+                        arcade_rumble(hit_player, 150, 200);
                         break;
-                    case FX_GAMEOVER:  ended = 1; won = 0; break;
+                    case FX_GAMEOVER:
+                        ended = 1; won = 0;
+                        arcade_rumble(hit_player, 255, 400);
+                        break;
                     default: break;
                     }
                     if (be->on_player_hit.remove_self) e->active = 0;

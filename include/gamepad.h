@@ -110,4 +110,16 @@ int  gamepad_usb_source_for_addr(uint8_t addr);
  * frees up (and its player slot reverts to keyboard if unclaimed). */
 void gamepad_usb_disconnect_addr(uint8_t addr);
 
+/* ──────── Rumble ──────── */
+
+/* Buzz whichever USB controller is assigned to 'player_slot' (0/1) at
+ * 'strength' (0-255) for up to 'ms' (capped at 2000) — a silent no-op
+ * if that slot has no USB source right now. Auto-stops on its own;
+ * see gamepad_rumble_idle_check(). */
+void gamepad_set_rumble(int player_slot, uint8_t strength, uint32_t ms);
+
+/* Call once from the idle task: stops an active rumble once its
+ * duration has elapsed. */
+void gamepad_rumble_idle_check(void);
+
 #endif /* GAMEPAD_H */

@@ -39,6 +39,7 @@
 #define SYS_DEMO_SAVE   35   /* EBX = game name: persist the captured demo, 1/0 */
 #define SYS_ATTRACT     36   /* EBX = op (0 arm/1 active), ECX = game name */
 #define SYS_PAD_ASSIGN  37   /* EBX = pad_assign_req_t*: list/reassign controllers */
+#define SYS_RUMBLE      38   /* EBX = player slot, ECX = strength 0-255, EDX = ms */
 
 /* GDT segment selectors */
 #define GDT_KERNEL_CODE  0x08

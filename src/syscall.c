@@ -593,6 +593,14 @@ static void syscall_handler(registers_t* regs) {
             break;
         }
 
+        case SYS_RUMBLE: {
+            /* EBX = player slot, ECX = strength 0-255, EDX = ms.
+             * Silently a no-op when that slot has no USB pad. */
+            gamepad_set_rumble((int)regs->ebx, (uint8_t)regs->ecx, (uint32_t)regs->edx);
+            regs->eax = 0;
+            break;
+        }
+
         case SYS_DEMO_SAVE: {
             /* Launcher: persist the just-played game's captured demo. */
             const char* name = (const char*)regs->ebx;

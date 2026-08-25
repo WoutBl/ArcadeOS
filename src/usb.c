@@ -131,6 +131,15 @@ static int16_t ds4_axis(uint8_t v) {
     return (int16_t)((int32_t)v * 257 - 32768);
 }
 
+/* The most recently active DualShock 4 (set in ds4_decode below), so
+ * usb_set_rumble() has something to send an output report back to.
+ * Deliberately just one device, not per-source: real-hardware testing
+ * on this project has only ever involved a single physical DS4, and
+ * generalizing to target a specific one of two simultaneous pads isn't
+ * worth the extra bookkeeping until someone actually has two. */
+static usb_controller_t* ds4_hc  = 0;
+static usb_device_t*     ds4_dev = 0;
+
 /*
  * DualShock 4 USB input report (report protocol, report ID 0x01):
  *   byte 0: 0x01 (report ID)
@@ -142,11 +151,18 @@ static int16_t ds4_axis(uint8_t v) {
  *   byte 7: [0] PS button [1] touchpad click
  *   byte 8: L2 analog      byte 9: R2 analog
  */
-static void ds4_decode(const usb_device_t* dev, const uint8_t* d, int len) {
+static void ds4_decode(usb_controller_t* hc, usb_device_t* dev,
+                       const uint8_t* d, int len) {
     if (len < 10 || d[0] != 0x01) return;
 
     int source = gamepad_usb_source_for_addr(dev->addr);
     if (source < 0) return;   /* Both USB pad slots already taken */
+
+    /* Remembered so usb_set_rumble() can send an output report back to
+     * this exact device later — see its comment for the "only tracks
+     * the most recently active DS4" scope note. */
+    ds4_hc  = hc;
+    ds4_dev = dev;
 
     /* One-time confirmation that the input pipe is alive */
     static int announced = 0;
@@ -189,6 +205,66 @@ static void ds4_decode(const usb_device_t* dev, const uint8_t* d, int len) {
                      ds4_axis(d[1]), ds4_axis(d[2]),
                      ds4_axis(d[3]), ds4_axis(d[4]),
                      d[8], d[9]);
+}
+
+/* DS4 USB output report (report ID 0x05). Byte layout confirmed
+ * against the Linux kernel's hid-playstation.c
+ * (dualshock4_output_report_common / dualshock4_output_worker) rather
+ * than a half-remembered convention: byte 1 is valid_flag0, and only
+ * its bit 0 (motor) and bit 1 (LED) need to be set — NOT every bit,
+ * which is what the previous version did and is one real difference
+ * from the reference driver, though tolerant firmware would likely
+ * have accepted it either way. */
+#define DS4_FLAG0_MOTOR 0x01
+#define DS4_FLAG0_LED   0x02
+
+void usb_set_rumble(uint8_t weak, uint8_t strong) {
+    if (!ds4_hc || !ds4_dev) {
+        /* Log once: distinguishes "never even tried" from "tried and
+         * the transfer failed" the next time someone checks the log. */
+        static int warned = 0;
+        if (!warned) {
+            warned = 1;
+            terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_BROWN, VGA_COLOR_BLACK));
+            terminal_writestring("[USB] Rumble requested but no DS4 has sent a report yet\n");
+        }
+        return;
+    }
+
+    uint8_t report[32];
+    memset(report, 0, sizeof(report));
+    report[0] = 0x05;                          /* Report ID */
+    report[1] = DS4_FLAG0_MOTOR | DS4_FLAG0_LED;  /* valid_flag0 */
+    report[2] = 0x00;                          /* valid_flag1 (unused here) */
+    report[4] = weak;      /* motor_right (weak/high-frequency) */
+    report[5] = strong;    /* motor_left (strong/low-frequency) */
+    report[6] = 0x00;      /* lightbar red   */
+    report[7] = 0x40;      /* lightbar green */
+    report[8] = 0xFF;      /* lightbar blue — a blue glow while it's buzzing */
+
+    usb_setup_t s;
+    s.bmRequestType = 0x21;   /* Host->device, class, interface */
+    s.bRequest      = 0x09;   /* SET_REPORT */
+    s.wValue        = 0x0205; /* (Output report type 2 << 8) | report ID 5 */
+    s.wIndex        = 0;      /* HID interface — DS4 only exposes one over USB */
+    s.wLength       = sizeof(report);
+
+    int r = -1;
+    if (ds4_hc->type == USB_HC_UHCI)
+        r = uhci_control_xfer(ds4_hc, ds4_dev, &s, report, sizeof(report));
+    else if (ds4_hc->type == USB_HC_XHCI)
+        r = xhci_control_xfer(ds4_dev, &s, report, sizeof(report));
+
+    /* Only log on a state change — rumble fires often (every score
+     * tick in a builder game), a line per call would flood the log. */
+    static int last_r = -2;
+    if (r != last_r) {
+        last_r = r;
+        terminal_setcolor(vga_entry_color(
+            r >= 0 ? VGA_COLOR_LIGHT_GREEN : VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
+        terminal_writestring(r >= 0 ? "[USB] Rumble SET_REPORT ok\n"
+                                    : "[USB] Rumble SET_REPORT FAILED\n");
+    }
 }
 
 /* ──────── USB boot-protocol keyboard ────────
@@ -272,9 +348,10 @@ static void bootkbd_decode(const uint8_t* d, int len) {
  * devices are treated as boot-protocol keyboards; anything else is
  * logged so the transfer engine can be verified with any HID device.
  */
-void usb_hid_input(usb_device_t* dev, const uint8_t* data, int len) {
+void usb_hid_input(usb_controller_t* hc, usb_device_t* dev,
+                   const uint8_t* data, int len) {
     if (is_dualshock4(dev)) {
-        ds4_decode(dev, data, len);
+        ds4_decode(hc, dev, data, len);
         return;
     }
     if (dev->dev_class == USB_CLASS_HID && len == 8) {

@@ -257,6 +257,18 @@ static int uhci_control(usb_controller_t* hc, uint8_t addr, int low_speed,
     return transferred;
 }
 
+/* Device-centric OUT-with-payload wrapper (e.g. HID SET_REPORT) for
+ * callers outside this file — uhci_control() itself already supports
+ * either direction, this just unpacks the fields it wants from a
+ * usb_device_t so usb.c doesn't need to know uhci_control()'s raw
+ * parameter list. */
+int uhci_control_xfer(usb_controller_t* hc, usb_device_t* dev,
+                      const usb_setup_t* setup, uint8_t* data, uint32_t len) {
+    if (!dev) return -1;
+    return uhci_control(hc, dev->addr, dev->low_speed, dev->ep0_maxpkt,
+                        setup, data, len);
+}
+
 /* Convenience wrappers */
 
 static int usb_get_descriptor(usb_controller_t* hc, usb_device_t* dev,
@@ -362,7 +374,7 @@ static void uhci_service_interrupt_pipe(usb_controller_t* hc, int port) {
     /* A report arrived */
     int len = (int)((sts + 1) & 0x7FF);
     if (len > 0)
-        usb_hid_input(dev, int_buf[port], len);
+        usb_hid_input(hc, dev, int_buf[port], len);
 
     /* Re-arm with the next data toggle */
     int_toggle[port] ^= 1;

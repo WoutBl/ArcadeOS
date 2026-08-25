@@ -182,6 +182,7 @@ int main(void) {
                     lives--;
                     hurt_flash = 12;
                     sfx_lose();
+                    arcade_rumble(0, 220, 150);   /* Silent no-op off a USB pad */
                     if (lives <= 0) {
                         game_over = 1;
                         sfx_gameover();

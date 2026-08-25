@@ -291,6 +291,15 @@ static int xhci_control(usb_device_t* dev, const usb_setup_t* setup,
     return (int)len;
 }
 
+/* Exposed for callers outside this file (e.g. usb.c's rumble sender).
+ * xhci_control() already ignores 'dev' (this driver's transfer engine
+ * only ever has one active device end-to-end), so this is a thin
+ * naming/visibility wrapper, not a behavior change. */
+int xhci_control_xfer(usb_device_t* dev, const usb_setup_t* setup,
+                      uint8_t* data, uint32_t len) {
+    return xhci_control(dev, setup, data, len);
+}
+
 static int xhci_get_descriptor(usb_device_t* dev, uint8_t type, uint8_t index,
                                uint8_t* out, uint16_t len) {
     usb_setup_t s;
@@ -322,7 +331,7 @@ static void handle_transfer_event(const xhci_trb_t* ev) {
         uint32_t residual = ev->d2 & 0xFFFFFF;
         int len = (int)(int_queued - residual);
         if (len > 0)
-            usb_hid_input(&engine_hc->devices[0], int_buf, len);
+            usb_hid_input(engine_hc, &engine_hc->devices[0], int_buf, len);
     }
     int_pipe_arm();                      /* Always keep a TRB pending */
 }

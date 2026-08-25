@@ -63,6 +63,10 @@ int pad_assign_op(pad_assign_req_t* rq) {
     return ret;
 }
 
+void rumble(int player_slot, int strength, int ms) {
+    asm volatile("int $0x80" : : "a"(38), "b"(player_slot), "c"(strength), "d"(ms) : "memory");
+}
+
 void report_score(int score) {
     asm volatile("int $0x80" : : "a"(30), "b"(score) : "memory");
 }

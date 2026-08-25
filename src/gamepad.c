@@ -7,6 +7,8 @@
 #include "gamepad.h"
 #include "keyboard.h"
 #include "vga.h"
+#include "usb.h"
+#include "clock.h"
 
 /*
  * Per-SOURCE raw state (see gamepad.h for the source/assignment split).
@@ -320,5 +322,50 @@ void gamepad_usb_disconnect_addr(uint8_t addr) {
             int kb = (slot == 0) ? GAMEPAD_SRC_KEYBOARD_A : GAMEPAD_SRC_KEYBOARD_B;
             if (assignment[kb] < 0) assignment[kb] = slot;
         }
+    }
+}
+
+/* ──────── Rumble ────────
+ *
+ * A short haptic buzz for game events (hit, score, game over) — see
+ * sdk/arcade.h's arcade_rumble(). Auto-stops after the requested
+ * duration via gamepad_rumble_idle_check() (called from the idle
+ * task), so a game can fire-and-forget without tracking a timer or
+ * risking a stuck motor if it exits mid-buzz. */
+
+static int      rumble_active    = 0;
+static uint32_t rumble_stop_tick = 0;
+
+void gamepad_set_rumble(int player_slot, uint8_t strength, uint32_t ms) {
+    if (player_slot < 0 || player_slot > 1) return;
+
+    /* Only a USB source can actually buzz; a keyboard-only slot is a
+     * silent no-op rather than an error. Logged once (not every call —
+     * this is a hot path) so a "no buzz" report is diagnosable: did
+     * gamepad.c even think a USB pad was on this slot, or did it get
+     * that far and usb_set_rumble() itself have nothing to send to? */
+    int has_usb = 0;
+    for (int s = GAMEPAD_SRC_USB_0; s < GAMEPAD_NUM_SOURCES; s++)
+        if (assignment[s] == player_slot && raw[s].connected) has_usb = 1;
+    if (!has_usb) {
+        static int warned = 0;
+        if (!warned) {
+            warned = 1;
+            terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_BROWN, VGA_COLOR_BLACK));
+            terminal_writestring("[PAD] Rumble requested but that player slot has no USB pad\n");
+        }
+        return;
+    }
+
+    if (ms > 2000) ms = 2000;   /* Safety cap, same spirit as sfx_tone_v's */
+    usb_set_rumble(strength, strength);
+    rumble_active    = 1;
+    rumble_stop_tick = system_ticks + ms;
+}
+
+void gamepad_rumble_idle_check(void) {
+    if (rumble_active && system_ticks >= rumble_stop_tick) {
+        usb_set_rumble(0, 0);
+        rumble_active = 0;
     }
 }

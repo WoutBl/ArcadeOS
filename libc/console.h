@@ -50,6 +50,7 @@ int net_op(net_req_t* rq);
  * games GET it for name tags. See session_req_t in console_abi.h. */
 int session_op(session_req_t* rq);
 int pad_assign_op(pad_assign_req_t* rq);
+void rumble(int player_slot, int strength, int ms);
 
 /* Poll for a beamed game to launch (launcher only). */
 int beam_poll(char* buf);

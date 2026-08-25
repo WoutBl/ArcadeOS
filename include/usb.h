@@ -95,10 +95,12 @@ usb_controller_t* usb_get_controller(int index);
 
 /*
  * Called by HC drivers when an interrupt IN report arrives from an
- * enumerated device. usb.c decodes known layouts (DualShock 4) and
- * feeds the gamepad subsystem.
+ * enumerated device. 'hc' is the controller it arrived on (needed to
+ * send anything back, e.g. rumble). usb.c decodes known layouts
+ * (DualShock 4) and feeds the gamepad subsystem.
  */
-void usb_hid_input(usb_device_t* dev, const uint8_t* data, int len);
+void usb_hid_input(usb_controller_t* hc, usb_device_t* dev,
+                   const uint8_t* data, int len);
 
 /* Called by HC drivers after successful enumeration (for logging) */
 void usb_announce_device(usb_device_t* dev);
@@ -108,5 +110,19 @@ int  uhci_init(usb_controller_t* hc);   /* Returns 1 on success */
 void uhci_poll(usb_controller_t* hc);
 int  xhci_init(usb_controller_t* hc);   /* Architectural stub */
 void xhci_poll(usb_controller_t* hc);
+
+/* Host-to-device control transfer with a data payload (e.g. a HID
+ * SET_REPORT), one per HC type — both already support OUT direction
+ * internally, these just expose it uniformly. Returns 0 on success. */
+int uhci_control_xfer(usb_controller_t* hc, usb_device_t* dev,
+                      const usb_setup_t* setup, uint8_t* data, uint32_t len);
+int xhci_control_xfer(usb_device_t* dev, const usb_setup_t* setup,
+                      uint8_t* data, uint32_t len);
+
+/* Rumble the most recently active DualShock 4, if any (silently a
+ * no-op otherwise — keyboards and unrecognized HID devices can't
+ * buzz). strength is 0-255 for both motors; see gamepad.c for the
+ * player-slot-aware, duration/auto-stop wrapper games actually call. */
+void usb_set_rumble(uint8_t weak, uint8_t strong);
 
 #endif /* USB_H */

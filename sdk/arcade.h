@@ -158,6 +158,16 @@ static inline void sfx_gameover(void) { sfx_tone_v(1, 150, 400, 255); }
  * any determinism the game relies on — is untouched. */
 void sfx_explosion(void);
 
+/* Haptic buzz for player_index (0 or 1) at 'strength' (0-255) for up
+ * to 'ms' (capped at 2000 by the kernel). A silent no-op if that
+ * player isn't currently on a USB pad — keyboard players (and games
+ * that never call this) are entirely unaffected. Auto-stops on its
+ * own; fire-and-forget, no cleanup needed even if the game exits
+ * mid-buzz. */
+static inline void arcade_rumble(int player_index, int strength, int ms) {
+    rumble(player_index, strength, ms);
+}
+
 
 /* ──────── Netplay (UDP) ────────
  *

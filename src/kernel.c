@@ -55,6 +55,7 @@ static void idle_task(void) {
         klog_idle_flush();        /* Persist the kernel log (throttled) */
         session_idle_flush();     /* Persist a dirty highscore board */
         net_poll();               /* Pump the NIC + REST API */
+        gamepad_rumble_idle_check();  /* Auto-stop an expired rumble */
         asm volatile("sti\nhlt"); /* Enable IRQs, then sleep */
     }
 }
