@@ -38,6 +38,10 @@ void fb_overlay_rect(int x, int y, int w, int h, uint32_t color);
 void fb_overlay_text(int x, int y, const char* s, uint32_t color, int scale);
 void fb_overlay_image(int x, int y, int w, int h, const uint32_t* px);
 
+/* PlayStation-style face-button icon (Cross/Circle/Square/Triangle) for
+ * kernel UI prompts — pass a PAD_BTN_A/B/X/Y from console_abi.h. */
+void fb_overlay_button(int btn, int x, int y, int scale);
+
 /* ──────── Page flipping (Bochs/QEMU dispi; no-ops without it) ──────── */
 int  fb_flip_available(void);   /* 1 when double buffering is active */
 uint32_t* fb_ptr_back(void);    /* Hidden page (render target) */

@@ -57,6 +57,12 @@ int session_op(session_req_t* rq) {
     return ret;
 }
 
+int pad_assign_op(pad_assign_req_t* rq) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(37), "b"(rq) : "memory");
+    return ret;
+}
+
 void report_score(int score) {
     asm volatile("int $0x80" : : "a"(30), "b"(score) : "memory");
 }

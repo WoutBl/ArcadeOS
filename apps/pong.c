@@ -13,6 +13,8 @@
 #include "../libc/syscall.h"
 #include "../libc/string.h"
 
+ARCADE_GAME("Pong");
+
 /* Persistent high score: most points player 1 racked up in a session */
 #define SAVE_MAGIC 0xA2CADE03u
 typedef struct { unsigned int magic; int high; } save_t;

@@ -60,31 +60,48 @@ static void idle_task(void) {
 }
 
 /* ──────── Boot splash ──────── */
+/*
+ * PS1-style boot moment: the title fades up from black with the accent
+ * bars sliding in behind it, and the boot chime lands the instant it
+ * hits full brightness — then a short hold so it registers before the
+ * rest of boot continues underneath it.
+ */
 static void boot_splash(void) {
     if (!gfx_ready()) return;
 
     int w = (int)fb_width();
     int h = (int)fb_height();
 
-    gfx_clear(gfx_rgb(8, 10, 30));
-
-    /* Accent bars */
-    gfx_fill_rect(0, h / 2 - 60, w, 4, gfx_rgb(80, 120, 255));
-    gfx_fill_rect(0, h / 2 + 44, w, 4, gfx_rgb(80, 120, 255));
-
-    /* Title */
     const char* title = "ARCADE OS";
-    int scale = 4;
-    int tw = (int)strlen(title) * 8 * scale;
-    gfx_draw_text((w - tw) / 2, h / 2 - 32, title,
-                  gfx_rgb(255, 255, 255), GFX_TRANSPARENT, scale);
-
-    const char* sub = "GAMING CONSOLE  v" OS_VERSION;
+    const char* sub    = "GAMING CONSOLE  v" OS_VERSION;
+    int tscale = 4;
+    int tw = (int)strlen(title) * 8 * tscale;
     int sw = (int)strlen(sub) * 8;
-    gfx_draw_text((w - sw) / 2, h / 2 + 16, sub,
-                  gfx_rgb(140, 160, 220), GFX_TRANSPARENT, 1);
+    const int steps = 16;
 
-    gfx_present();
+    for (int i = 0; i <= steps; i++) {
+        int b     = (i * 255) / steps;                     /* Brightness 0..255 */
+        int slide = (steps - i) * (w / 2) / steps;          /* Bars converge to 0 */
+
+        gfx_clear(gfx_rgb(8, 10, 30));
+        gfx_fill_rect(-slide, h / 2 - 60, w, 4,
+                      gfx_rgb((b * 80) / 255, (b * 120) / 255, b));
+        gfx_fill_rect(slide,  h / 2 + 44, w, 4,
+                      gfx_rgb((b * 80) / 255, (b * 120) / 255, b));
+        gfx_draw_text((w - tw) / 2, h / 2 - 32, title,
+                      gfx_rgb(b, b, b), GFX_TRANSPARENT, tscale);
+        if (i > steps / 2) {
+            int sb = ((i - steps / 2) * 255) / (steps - steps / 2);
+            gfx_draw_text((w - sw) / 2, h / 2 + 16, sub,
+                          gfx_rgb((sb * 140) / 255, (sb * 160) / 255, (sb * 220) / 255),
+                          GFX_TRANSPARENT, 1);
+        }
+        gfx_present();
+        sleep_ms(28);
+    }
+
+    audio_boot_chime();     /* Lands exactly as the logo hits full brightness */
+    sleep_ms(500);          /* Hold so the moment registers before boot continues */
 }
 
 void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
@@ -161,6 +178,11 @@ void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
     usb_init();
     gamepad_init();
 
+    /* 13b. Audio: AC97/HDA PCM out, PC speaker fallback (needs the PCI
+     *      scan; done before the splash so the boot chime is ready to
+     *      land with it). */
+    audio_init();
+
     /* 14. Graphics double buffer + splash screen */
     gfx_init();
     boot_splash();
@@ -179,10 +201,6 @@ void kernel_main(uint32_t magic, multiboot_info_t* mboot_info) {
     uint64_t kernel_stack_top = (uint64_t)(uintptr_t)kmalloc(8192) + 8192;
     tss_init(kernel_stack_top);
     syscall_init();
-
-    /* 16. Audio: AC97 PCM out, PC speaker fallback (needs the PCI scan) */
-    audio_init();
-    audio_boot_chime();   /* PCM arpeggio — self-tests the mixer path */
 
     /* 16c. Universal rewind: allocate the snapshot ring */
     rewind_init();

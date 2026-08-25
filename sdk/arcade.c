@@ -4,6 +4,7 @@
 
 #include "arcade.h"
 #include "../libc/string.h"
+#include "../include/psglyphs.h"
 
 /* ──────── Framebuffer (static: user apps have no heap) ──────── */
 
@@ -102,6 +103,16 @@ void arcade_draw_sprite(surface_t* s, const sprite_t* spr, int x, int y, int sca
             surf_fill_rect(s, x + sx * scale, y + sy * scale, scale, scale, c);
         }
     }
+}
+
+void arcade_draw_button(surface_t* s, int btn, int x, int y, int scale) {
+    if (scale < 1) return;
+    const ps_glyph_t* g = ps_glyph_for_button((unsigned int)btn);
+    if (!g) return;
+    for (int r = 0; r < PS_GLYPH_SIZE; r++)
+        for (int c = 0; c < PS_GLYPH_SIZE; c++)
+            if (g->rows[r][c] == '#')
+                surf_fill_rect(s, x + c * scale, y + r * scale, scale, scale, g->color);
 }
 
 /* ──────── Entities ──────── */

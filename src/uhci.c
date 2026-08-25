@@ -25,6 +25,7 @@
 #include "vga.h"
 #include "pmm.h"
 #include "clock.h"
+#include "gamepad.h"
 
 /* ──────── UHCI I/O registers (offsets from BAR4) ──────── */
 #define UHCI_USBCMD     0x00   /* Command (16-bit) */
@@ -507,6 +508,7 @@ static void uhci_check_ports(usb_controller_t* hc, int announce) {
             uhci_enumerate_port(hc, port);
         } else if (!now && was) {
             hc->ports_connected &= ~(1 << port);
+            gamepad_usb_disconnect_addr(hc->devices[port].addr);
             hc->devices[port].in_use = 0;
             uhci_start_interrupt_pipe(hc, port);   /* Rebuild TD chain */
             if (announce) {

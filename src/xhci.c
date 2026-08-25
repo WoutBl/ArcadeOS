@@ -25,6 +25,7 @@
 #include "pmm.h"
 #include "paging.h"
 #include "clock.h"
+#include "gamepad.h"
 
 /* ──────── Capability registers (offsets from MMIO base) ──────── */
 #define XHCI_CAPLENGTH   0x00   /* Byte: operational register offset */
@@ -500,6 +501,7 @@ static void xhci_check_ports(usb_controller_t* hc) {
         if (!(sc & PORTSC_CCS)) {
             terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_BROWN, VGA_COLOR_BLACK));
             terminal_writestring("[XHCI] Device disconnected\n");
+            gamepad_usb_disconnect_addr(hc->devices[0].addr);
             hc->devices[0].in_use = 0;
             int_dci = 0;
         }

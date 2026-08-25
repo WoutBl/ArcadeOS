@@ -9,6 +9,8 @@
 #include "../sdk/arcade.h"
 #include "../libc/syscall.h"
 
+ARCADE_GAME("Snake");
+
 #define TILE_SIZE 20
 #define MAX_SNAKE 2048
 

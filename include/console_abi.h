@@ -96,6 +96,35 @@ typedef struct {
     uint64_t buf;    /* Payload pointer in the caller's space */
 } net_req_t;
 
+/* ──────── SYS_PAD_ASSIGN (controller-to-player assignment) ────────
+ *
+ * gamepad.h tracks up to PAD_NUM_SOURCES physical input sources
+ * (keyboard A/B + up to two USB pads) and which player slot (0/1) each
+ * currently feeds, reassignable at any time. The launcher's controller
+ * screen is the only expected caller. */
+
+#define PAD_NUM_SOURCES      4   /* Must match gamepad.h's GAMEPAD_NUM_SOURCES */
+#define PAD_SOURCE_LABEL_LEN 16
+
+#define PAD_ASSIGN_OP_LIST 0     /* Fill in info for every source */
+#define PAD_ASSIGN_OP_SET  1     /* Assign set_source -> set_slot (-1/0/1) */
+
+typedef struct {
+    uint32_t op;
+    /* PAD_ASSIGN_OP_LIST result, one entry per source id (0/1 = the
+     * keyboard's two virtual pads, 2/3 = USB pads 1/2) */
+    uint8_t  connected[PAD_NUM_SOURCES];
+    int8_t   slot[PAD_NUM_SOURCES];             /* -1 = unassigned */
+    char     label[PAD_NUM_SOURCES][PAD_SOURCE_LABEL_LEN];
+    /* PAD_ASSIGN_OP_LIST also drains gamepad_any_latched() here — see
+     * its comment; the assignment screen ORs this into its own input
+     * so a fully-unassigned source can still reassign itself back. */
+    uint16_t any_pressed;
+    /* PAD_ASSIGN_OP_SET input */
+    int32_t  set_source;
+    int32_t  set_slot;
+} pad_assign_req_t;
+
 /* ──────── SYS_SESSION (user profiles / active players) ──────── */
 
 #define SESSION_NAME_LEN 13     /* 12 chars + NUL */

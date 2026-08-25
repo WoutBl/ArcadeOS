@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ArcadeOS Game Builder</title>
+<style>
+  :root { --bg:#0a0c22; --panel:#12163c; --line:#5064ff; --text:#e8ecff; --dim:#7884c8; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text); font-family:ui-monospace,Menlo,monospace;
+         display:flex; flex-direction:column; align-items:center; padding:24px; gap:16px; }
+  h1 { font-size:20px; letter-spacing:2px; }
+  h1 span { color:var(--line); }
+  .row { display:flex; gap:16px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+  .panel { background:var(--panel); border:2px solid var(--line); border-radius:8px; padding:14px; }
+  canvas.grid { image-rendering:pixelated; cursor:crosshair; border:2px solid var(--line); background:
+    repeating-conic-gradient(#1a1f4a 0% 25%, #12163c 0% 50%) 0 0/16px 16px; }
+  .tools { display:flex; flex-direction:column; gap:10px; min-width:220px; }
+  button, select { background:#1a2050; color:var(--text); border:1px solid var(--line);
+    border-radius:4px; padding:6px 10px; font:inherit; cursor:pointer; }
+  button:hover { background:#26308c; }
+  button.active { background:var(--line); color:#fff; }
+  .swatches { display:grid; grid-template-columns:repeat(8,24px); gap:4px; }
+  .sw { width:24px; height:24px; border:1px solid #000; border-radius:3px; cursor:pointer; }
+  .sw.sel { outline:2px solid #fff; }
+  label { color:var(--dim); font-size:12px; }
+  .hint { color:var(--dim); font-size:11px; max-width:820px; text-align:center; }
+  input[type=text], input[type=number] { background:#0a0c22; color:var(--text); border:1px solid var(--line);
+    border-radius:4px; padding:5px; font:inherit; width:100px; }
+  input[type=color] { width:34px; height:26px; border:none; background:none; cursor:pointer; }
+  textarea { width:820px; height:140px; background:#0a0c22; color:#9fe89f; border:1px solid var(--line);
+    border-radius:4px; font:11px ui-monospace,Menlo,monospace; padding:8px; }
+
+  .tabs { display:flex; gap:6px; }
+  .tabs button { padding:8px 16px; }
+  .tabpanel { display:none; width:100%; }
+  .tabpanel.active { display:flex; flex-direction:column; align-items:center; gap:16px; }
+
+  .list { display:flex; flex-direction:column; gap:2px; min-width:260px; max-height:420px; overflow-y:auto; }
+  .list .item { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:4px; cursor:pointer; }
+  .list .item.sel { background:#26308c; }
+  .list .item .chip { width:16px; height:16px; border:1px solid #000; border-radius:3px; flex:none; }
+  .list .item .lbl { flex:1; font-size:12px; }
+  .list .item .del { color:#ff9078; font-size:12px; }
+  .field-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .tile-row { display:flex; align-items:center; gap:8px; padding:2px 4px; border-radius:4px; cursor:pointer; }
+  .tile-row.sel { background:#26308c; }
+  .tile-row .chip { width:20px; height:20px; border:1px solid #000; border-radius:3px; flex:none; }
+  #tilePalette { display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto; }
+
+  .status-ok { color:#78dc96; }
+  .status-err { color:#ff9078; }
+  #projectSelect, #levelSelect { min-width:200px; }
+</style>
+</head>
+<body>
+<h1>ARCADE<span>OS</span> GAME BUILDER</h1>
+<p class="hint">Assemble a game from layers, entities, and rules — no C, ever. DEPLOY compiles it
+with the console's own toolchain and uploads it straight to a running console over the LAN.</p>
+
+<div class="row" id="projectBar" style="align-items:center">
+  <label>GAME</label>
+  <select id="projectSelect"></select>
+  <button id="projectNew">+ CREATE GAME</button>
+  <button id="projectDup">DUPLICATE</button>
+  <button id="projectDelete">DELETE</button>
+</div>
+
+<div class="row" id="levelBar" style="align-items:center">
+  <label>LEVEL (played in order — clearing one advances to the next)</label>
+  <select id="levelSelect"></select>
+  <button id="levelNew">+ ADD LEVEL</button>
+  <button id="levelDup">DUPLICATE</button>
+  <button id="levelDelete">DELETE</button>
+</div>
+
+<div class="tabs">
+  <button class="tab active" data-tab="layers">LAYERS</button>
+  <button class="tab" data-tab="entities">ENTITIES</button>
+  <button class="tab" data-tab="rules">RULES &amp; SESSION</button>
+  <button class="tab" data-tab="deploy">DEPLOY</button>
+</div>
+
+<!-- ───────── LAYERS ───────── -->
+<section id="tab-layers" class="tabpanel active">
+  <div class="row">
+    <div class="panel tools">
+      <label>BACKGROUND BANDS (parallax, decorative, up to 3)</label>
+      <div class="list" id="bgList"></div>
+      <button id="bgAdd">+ ADD BAND</button>
+    </div>
+    <div class="panel tools" id="bgEdit"></div>
+  </div>
+
+  <div class="row">
+    <div class="panel tools">
+      <label>TILE LAYERS (back-to-front, up to 3 — only the TOPMOST is solid)</label>
+      <div class="list" id="tileList"></div>
+      <button id="tileAdd">+ ADD TILE LAYER</button>
+    </div>
+    <div class="panel"><canvas class="grid" id="tileGrid"></canvas></div>
+    <div class="panel tools">
+      <label>GRID</label>
+      <select id="tileGridSize">
+        <option value="20x15x32" selected>20 x 15 tiles @ 32px</option>
+        <option value="40x30x16">40 x 30 tiles @ 16px</option>
+      </select>
+      <label>TOOL</label>
+      <div class="row" style="gap:6px">
+        <button id="t-tpaint" class="active">PAINT</button>
+        <button id="t-tfill">FILL</button>
+      </div>
+      <label>TILES (0 erases; right-drag erases)</label>
+      <div id="tilePalette"></div>
+      <div class="row" style="gap:6px">
+        <button id="tileBorder">WALL BORDER</button>
+        <button id="tileClear">CLEAR</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── ENTITIES ───────── -->
+<section id="tab-entities" class="tabpanel">
+  <div class="row">
+    <div class="panel tools">
+      <label>ENTITIES (up to 32 — first one should be your player)</label>
+      <div class="list" id="entList"></div>
+      <button id="entAdd">+ ADD ENTITY</button>
+    </div>
+
+    <div class="panel"><canvas class="grid" id="spriteGrid"></canvas></div>
+
+    <div class="panel tools">
+      <label>SPRITE SIZE</label>
+      <select id="spriteSize">
+        <option value="8">8 x 8</option>
+        <option value="16" selected>16 x 16</option>
+        <option value="24">24 x 24</option>
+      </select>
+      <label>TOOL</label>
+      <div class="row" style="gap:6px">
+        <button id="t-spaint" class="active">PAINT</button>
+        <button id="t-serase">ERASE</button>
+        <button id="t-sfill">FILL</button>
+        <button id="t-spick">PICK</button>
+      </div>
+      <label>PALETTE (right-click to replace)</label>
+      <div class="swatches" id="spriteSwatches"></div>
+      <input type="color" id="spriteCustom" value="#ffd37e">
+    </div>
+
+    <div class="panel tools" id="entFields"></div>
+  </div>
+</section>
+
+<!-- ───────── RULES & SESSION ───────── -->
+<section id="tab-rules" class="tabpanel">
+  <div class="panel tools" style="min-width:360px">
+    <label>GAME NAME (≤7 chars — also the save-slot key)</label>
+    <input type="text" id="gName" value="mygame" spellcheck="false">
+    <label>DISPLAY TITLE</label>
+    <input type="text" id="gTitle" value="My Game" spellcheck="false" style="width:220px">
+    <label>SESSION</label>
+    <select id="gSession">
+      <option value="1p" selected>1 PLAYER</option>
+      <option value="2p">2 PLAYERS (LOCAL)</option>
+      <option value="choose">LET THE PLAYER CHOOSE</option>
+    </select>
+    <label>LIVES (0 = endless / score-attack)</label>
+    <input type="number" id="gLives" value="3" min="0" max="9">
+    <label>WIN SCORE (0 = no win condition)</label>
+    <input type="number" id="gWinScore" value="0" min="0">
+    <label>TIME LIMIT, SECONDS (0 = none)</label>
+    <input type="number" id="gTimeLimit" value="0" min="0">
+  </div>
+</section>
+
+<!-- ───────── DEPLOY ───────── -->
+<section id="tab-deploy" class="tabpanel">
+  <div class="panel tools" style="min-width:360px">
+    <label>CONSOLE ADDRESS</label>
+    <div class="field-row">
+      <input type="text" id="dIp" value="10.0.2.86" style="width:140px">
+      <span>:</span>
+      <input type="number" id="dPort" value="8080" style="width:80px">
+    </div>
+    <button id="deployBtn">DEPLOY TO CONSOLE</button>
+    <div id="deployStatus"></div>
+  </div>
+  <div class="panel">
+    <div class="row" style="gap:8px; margin-bottom:8px">
+      <button id="showJson">SHOW ASSEMBLED JSON</button>
+      <button id="copyJson">COPY</button>
+    </div>
+    <textarea id="jsonOut" spellcheck="false" readonly placeholder="SHOW ASSEMBLED JSON to see exactly what gets sent to /build"></textarea>
+  </div>
+</section>
+
+<script>
+"use strict";
+
+/* ──────── Tabs ──────── */
+for (const b of document.querySelectorAll(".tab")) {
+  b.onclick = () => {
+    for (const t of document.querySelectorAll(".tab")) t.classList.toggle("active", t === b);
+    for (const p of document.querySelectorAll(".tabpanel"))
+      p.classList.toggle("active", p.id === "tab-" + b.dataset.tab);
+  };
+}
+
+/* ──────── Game state ──────── */
+const defaultPalette = ["#ffffff","#ffd37e","#e05050","#3c64ff","#78dc96",
+  "#ffdc50","#b478ff","#1b2450","#0a0c22","#ff9078","#50c8c8","#c8c8d2",
+  "#787878","#a05028","#f0a0c8","#000000"];
+
+function blankSprite(n) { return Array(n * n).fill(null); }
+
+function newEntity(role) {
+  return {
+    role, playerIndex: 0, spriteSize: 16, pixels: blankSprite(16),
+    x: 100, y: 100, w: 0, h: 0, vx: 1, vy: 1, speed: 2,
+    behavior: role === "player" ? "playerMove" : "static",
+    patrolX2: 400, patrolY2: 100,
+    onPlayerHit: { effect: role === "player" ? "none" : "loseLife", amount: 10, removeSelf: role === "pickup" },
+  };
+}
+
+function newTileLayer() {
+  const w = 20, h = 15, tile = 32;
+  return {
+    w, h, tile, cells: Array(w * h).fill(0),
+    tiles: JSON.parse(JSON.stringify([
+      { c: "#000000", solid: false }, { c: "#3c64ff", solid: true }, { c: "#78dc96", solid: true },
+      { c: "#e05050", solid: false }, { c: "#ffd37e", solid: false }, { c: "#b478ff", solid: false },
+      { c: "#50c8c8", solid: true }, { c: "#ffdc50", solid: false },
+    ])),
+  };
+}
+
+function newLevel() {
+  return {
+    bgLayers: [{ color: "#101830", scrollSpeed: 1, bandY: 0, bandH: 480 }],
+    tileLayers: [],
+    entities: [newEntity("player")],
+  };
+}
+
+function defaultState(name) {
+  return {
+    name: name || "mygame", title: "My Game", session: "1p",
+    lives: 3, winScore: 0, timeLimitSec: 0,
+    levels: [newLevel()], curLevel: 0,
+  };
+}
+let selEntity = 0, selTileLayer = -1, selBg = 0;
+
+/* The world currently being edited in the Layers/Entities tabs. */
+function curLevel() { return state.levels[state.curLevel]; }
+
+/* Upgrades a state saved before levels existed (flat bgLayers/
+ * tileLayers/entities at the top) into a single-level game. Mutates
+ * and returns its argument; a no-op on an already-current state. */
+function migrateState(st) {
+  if (!st.levels) {
+    st.levels = [{ bgLayers: st.bgLayers || [], tileLayers: st.tileLayers || [],
+                  entities: (st.entities && st.entities.length) ? st.entities : [newEntity("player")] }];
+    st.curLevel = 0;
+    delete st.bgLayers; delete st.tileLayers; delete st.entities;
+  }
+  return st;
+}
+
+/* ──────── Multiple saved games ────────
+ * Projects are keyed by an internal id (NOT the game name, which the
+ * player can freely rename without losing their save) and persisted
+ * to localStorage so CREATE GAME lets you build several games and
+ * switch between them before deploying any one of them. */
+function newProjectId() { return "g" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function loadProjects() { try { return JSON.parse(localStorage.getItem("arcade-builder-projects")) || {}; } catch (e) { return {}; } }
+function saveProjects(p) { localStorage.setItem("arcade-builder-projects", JSON.stringify(p)); }
+
+let projects = loadProjects();
+let currentId = localStorage.getItem("arcade-builder-current");
+
+if (Object.keys(projects).length === 0) {
+  // One-time migration from this tool's old single-slot version.
+  let legacy = null;
+  try { legacy = JSON.parse(localStorage.getItem("arcade-builder")); } catch (e) { /* none */ }
+  currentId = newProjectId();
+  projects[currentId] = (legacy && legacy.entities && legacy.entities.length) ? legacy : defaultState();
+}
+// Upgrade every saved project still on the pre-levels flat schema.
+for (const id of Object.keys(projects)) migrateState(projects[id]);
+saveProjects(projects);
+if (!currentId || !projects[currentId]) currentId = Object.keys(projects)[0];
+localStorage.setItem("arcade-builder-current", currentId);
+
+let state = projects[currentId];
+
+function persist() { projects[currentId] = state; saveProjects(projects); }
+
+function renderProjectBar() {
+  const sel = document.getElementById("projectSelect");
+  sel.innerHTML = "";
+  Object.keys(projects).forEach(id => {
+    const st = projects[id];
+    const o = document.createElement("option");
+    o.value = id;
+    o.textContent = st.title || st.name || "Untitled";
+    if (id === currentId) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+function switchProject(id) {
+  if (!projects[id]) return;
+  currentId = id;
+  state = projects[id];
+  localStorage.setItem("arcade-builder-current", currentId);
+  refreshAll();
+}
+document.getElementById("projectSelect").onchange = e => switchProject(e.target.value);
+document.getElementById("projectNew").onclick = () => {
+  const id = newProjectId();
+  projects[id] = defaultState("game" + (Object.keys(projects).length + 1));
+  saveProjects(projects);
+  switchProject(id);
+  document.querySelector('.tab[data-tab="rules"]').click();
+  document.getElementById("gName").focus();
+};
+document.getElementById("projectDup").onclick = () => {
+  const copy = JSON.parse(JSON.stringify(state));
+  copy.name = (state.name + "2").slice(0, 7);
+  copy.title = state.title + " Copy";
+  const id = newProjectId();
+  projects[id] = copy;
+  saveProjects(projects);
+  switchProject(id);
+};
+document.getElementById("projectDelete").onclick = () => {
+  if (Object.keys(projects).length <= 1) {
+    alert("This is your only game — create another before deleting this one.");
+    return;
+  }
+  if (!confirm(`Delete "${state.title || state.name}"? This can't be undone.`)) return;
+  delete projects[currentId];
+  saveProjects(projects);
+  switchProject(Object.keys(projects)[0]);
+};
+
+/* ──────── Levels (each is its own world: layers + entities) ──────── */
+function renderLevelBar() {
+  const sel = document.getElementById("levelSelect");
+  sel.innerHTML = "";
+  state.levels.forEach((lvl, i) => {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = `Level ${i + 1}`;
+    if (i === state.curLevel) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+function switchLevel(i) {
+  if (!state.levels[i]) return;
+  state.curLevel = i;
+  refreshWorld();
+}
+document.getElementById("levelSelect").onchange = e => switchLevel(Number(e.target.value));
+document.getElementById("levelNew").onclick = () => {
+  if (state.levels.length >= 16) return;
+  state.levels.push(newLevel());
+  switchLevel(state.levels.length - 1);
+  persist();
+  document.querySelector('.tab[data-tab="layers"]').click();
+};
+document.getElementById("levelDup").onclick = () => {
+  const copy = JSON.parse(JSON.stringify(curLevel()));
+  if (state.levels.length >= 16) return;
+  state.levels.splice(state.curLevel + 1, 0, copy);
+  switchLevel(state.curLevel + 1);
+  persist();
+};
+document.getElementById("levelDelete").onclick = () => {
+  if (state.levels.length <= 1) {
+    alert("A game needs at least one level.");
+    return;
+  }
+  if (!confirm(`Delete level ${state.curLevel + 1}? This can't be undone.`)) return;
+  state.levels.splice(state.curLevel, 1);
+  switchLevel(Math.min(state.curLevel, state.levels.length - 1));
+  persist();
+};
+
+/* ──────── Shared list-panel helper ──────── */
+function renderList(container, items, sel, labelFn, colorFn, onSelect, onDelete) {
+  container.innerHTML = "";
+  items.forEach((it, i) => {
+    const row = document.createElement("div");
+    row.className = "item" + (i === sel ? " sel" : "");
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    chip.style.background = colorFn(it);
+    const lbl = document.createElement("span");
+    lbl.className = "lbl";
+    lbl.textContent = labelFn(it, i);
+    const del = document.createElement("span");
+    del.className = "del";
+    del.textContent = "✕";
+    del.onclick = (ev) => { ev.stopPropagation(); onDelete(i); };
+    row.append(chip, lbl, del);
+    row.onclick = () => onSelect(i);
+    container.appendChild(row);
+  });
+}
+
+/* ──────── Background bands ──────── */
+function renderBg() {
+  renderList(document.getElementById("bgList"), curLevel().bgLayers, selBg,
+    (b, i) => `Band ${i + 1} — scroll ${b.scrollSpeed}px/f`, b => b.color,
+    i => { selBg = i; renderBgEdit(); renderBg(); },
+    i => { curLevel().bgLayers.splice(i, 1); if (selBg >= curLevel().bgLayers.length) selBg = curLevel().bgLayers.length - 1; renderBg(); renderBgEdit(); persist(); });
+}
+function renderBgEdit() {
+  const box = document.getElementById("bgEdit");
+  box.innerHTML = "";
+  const b = curLevel().bgLayers[selBg];
+  if (!b) { box.innerHTML = "<label>No band selected</label>"; return; }
+  const mk = (labelText, key, type = "number") => {
+    const l = document.createElement("label"); l.textContent = labelText;
+    const inp = document.createElement("input"); inp.type = type; inp.value = b[key];
+    inp.oninput = () => { b[key] = type === "number" ? Number(inp.value) : inp.value; persist(); renderBg(); };
+    box.append(l, inp);
+  };
+  mk("COLOR", "color", "color");
+  mk("SCROLL SPEED (px/frame)", "scrollSpeed");
+  mk("BAND Y", "bandY");
+  mk("BAND HEIGHT", "bandH");
+}
+document.getElementById("bgAdd").onclick = () => {
+  if (curLevel().bgLayers.length >= 3) return;
+  curLevel().bgLayers.push({ color: "#202850", scrollSpeed: 1, bandY: 0, bandH: 480 });
+  selBg = curLevel().bgLayers.length - 1;
+  renderBg(); renderBgEdit(); persist();
+};
+
+/* ──────── Tile layers (adapted from level-editor.html) ──────── */
+const tGrid = document.getElementById("tileGrid");
+const tCtx = tGrid.getContext("2d");
+let tCell = 26, tTool = "tpaint", tCur = 1, tUndo = [];
+
+function curTileLayer() { return curLevel().tileLayers[selTileLayer]; }
+
+function renderTileList() {
+  const layers = curLevel().tileLayers;
+  renderList(document.getElementById("tileList"), layers, selTileLayer,
+    (l, i) => `Layer ${i + 1}${i === layers.length - 1 ? " (SOLID)" : ""} — ${l.w}x${l.h}@${l.tile}`,
+    l => l.tiles[1] ? l.tiles[1].c : "#000",
+    i => { selTileLayer = i; document.getElementById("tileGridSize").value = `${layers[i].w}x${layers[i].h}x${layers[i].tile}`; renderTilePalette(); drawTileGrid(); renderTileList(); },
+    i => { layers.splice(i, 1); if (selTileLayer >= layers.length) selTileLayer = layers.length - 1; renderTileList(); renderTilePalette(); drawTileGrid(); persist(); });
+}
+document.getElementById("tileAdd").onclick = () => {
+  if (curLevel().tileLayers.length >= 3) return;
+  curLevel().tileLayers.push(newTileLayer());
+  selTileLayer = curLevel().tileLayers.length - 1;
+  renderTileList(); renderTilePalette(); drawTileGrid(); persist();
+};
+
+function drawTileGrid() {
+  const l = curTileLayer();
+  if (!l) { tGrid.width = tGrid.height = 0; return; }
+  tCell = Math.max(8, Math.floor(560 / l.w));
+  tGrid.width = l.w * tCell; tGrid.height = l.h * tCell;
+  tCtx.clearRect(0, 0, tGrid.width, tGrid.height);
+  for (let y = 0; y < l.h; y++)
+    for (let x = 0; x < l.w; x++) {
+      const v = l.cells[y * l.w + x];
+      if (v) { tCtx.fillStyle = l.tiles[v].c; tCtx.fillRect(x * tCell, y * tCell, tCell, tCell); }
+    }
+  tCtx.strokeStyle = "rgba(80,100,255,.18)";
+  for (let i = 0; i <= l.w; i++) { tCtx.beginPath(); tCtx.moveTo(i*tCell,0); tCtx.lineTo(i*tCell,l.h*tCell); tCtx.stroke(); }
+  for (let i = 0; i <= l.h; i++) { tCtx.beginPath(); tCtx.moveTo(0,i*tCell); tCtx.lineTo(l.w*tCell,i*tCell); tCtx.stroke(); }
+  persist();
+}
+function tCellAt(ev) {
+  const r = tGrid.getBoundingClientRect();
+  const l = curTileLayer();
+  const x = Math.floor((ev.clientX - r.left) / tCell), y = Math.floor((ev.clientY - r.top) / tCell);
+  return (x >= 0 && y >= 0 && x < l.w && y < l.h) ? y * l.w + x : -1;
+}
+function tApply(i, val) {
+  const l = curTileLayer();
+  if (i < 0 || !l) return;
+  if (tTool === "tfill") {
+    const target = l.cells[i];
+    if (target === val) return;
+    const st = [i];
+    while (st.length) {
+      const j = st.pop();
+      if (j < 0 || j >= l.w * l.h || l.cells[j] !== target) continue;
+      l.cells[j] = val;
+      const x = j % l.w;
+      if (x > 0) st.push(j - 1);
+      if (x < l.w - 1) st.push(j + 1);
+      st.push(j - l.w, j + l.w);
+    }
+  } else {
+    l.cells[i] = val;
+  }
+  drawTileGrid();
+}
+let tPainting = 0;
+tGrid.addEventListener("mousedown", e => {
+  if (!curTileLayer()) return;
+  e.preventDefault();
+  tUndo.push([...curTileLayer().cells]); if (tUndo.length > 64) tUndo.shift();
+  tPainting = (e.button === 2) ? 2 : 1;
+  tApply(tCellAt(e), tPainting === 2 ? 0 : tCur);
+});
+tGrid.addEventListener("mousemove", e => { if (tPainting && tTool === "tpaint") tApply(tCellAt(e), tPainting === 2 ? 0 : tCur); });
+window.addEventListener("mouseup", () => tPainting = 0);
+tGrid.addEventListener("contextmenu", e => e.preventDefault());
+for (const t of ["tpaint", "tfill"])
+  document.getElementById("t-" + t).onclick = () => {
+    tTool = t;
+    document.getElementById("t-tpaint").classList.toggle("active", t === "tpaint");
+    document.getElementById("t-tfill").classList.toggle("active", t === "tfill");
+  };
+function renderTilePalette() {
+  const box = document.getElementById("tilePalette");
+  box.innerHTML = "";
+  const l = curTileLayer();
+  if (!l) return;
+  l.tiles.forEach((t, i) => {
+    const row = document.createElement("div");
+    row.className = "tile-row" + (i === tCur ? " sel" : "");
+    const chip = document.createElement("div"); chip.className = "chip";
+    chip.style.background = i ? t.c : "repeating-conic-gradient(#666 0% 25%, #333 0% 50%)";
+    const lab = document.createElement("span"); lab.textContent = i === 0 ? "0 ERASE" : String(i);
+    lab.style.fontSize = "12px";
+    row.append(chip, lab);
+    if (i) {
+      const col = document.createElement("input"); col.type = "color"; col.value = t.c;
+      col.oninput = () => { t.c = col.value; drawTileGrid(); renderTileList(); };
+      col.onclick = ev => ev.stopPropagation();
+      const chkLab = document.createElement("label");
+      const chk = document.createElement("input"); chk.type = "checkbox"; chk.checked = t.solid;
+      chk.onchange = () => { t.solid = chk.checked; };
+      chk.onclick = ev => ev.stopPropagation();
+      chkLab.append(chk, document.createTextNode(" SOLID"));
+      row.append(col, chkLab);
+    }
+    row.onclick = () => { tCur = i; renderTilePalette(); };
+    box.appendChild(row);
+  });
+  if (l.tiles.length < 8) {
+    const add = document.createElement("button");
+    add.textContent = "+ TILE COLOR";
+    add.onclick = () => { l.tiles.push({ c: "#888888", solid: false }); renderTilePalette(); };
+    box.appendChild(add);
+  }
+}
+document.getElementById("tileGridSize").onchange = e => {
+  const l = curTileLayer(); if (!l) return;
+  const [w, h, t] = e.target.value.split("x").map(Number);
+  l.w = w; l.h = h; l.tile = t; l.cells = Array(w * h).fill(0);
+  drawTileGrid(); renderTileList();
+};
+document.getElementById("tileClear").onclick = () => {
+  const l = curTileLayer(); if (!l) return;
+  tUndo.push([...l.cells]); l.cells = Array(l.w * l.h).fill(0); drawTileGrid();
+};
+document.getElementById("tileBorder").onclick = () => {
+  const l = curTileLayer(); if (!l) return;
+  tUndo.push([...l.cells]);
+  for (let x = 0; x < l.w; x++) { l.cells[x] = tCur || 1; l.cells[(l.h - 1) * l.w + x] = tCur || 1; }
+  for (let y = 0; y < l.h; y++) { l.cells[y * l.w] = tCur || 1; l.cells[y * l.w + l.w - 1] = tCur || 1; }
+  drawTileGrid();
+};
+window.addEventListener("keydown", e => { if (e.key === "u" && tUndo.length) { curTileLayer().cells = tUndo.pop(); drawTileGrid(); } });
+
+/* ──────── Entities + sprite paint (adapted from sprite-editor.html) ──────── */
+const sGrid = document.getElementById("spriteGrid");
+const sCtx = sGrid.getContext("2d");
+let sCell = 20, sTool = "spaint", sColor = "#ffd37e", sSel = 1, sUndo = [];
+let spritePalette = [...defaultPalette];
+
+function curEntity() { return curLevel().entities[selEntity]; }
+
+function renderEntList() {
+  renderList(document.getElementById("entList"), curLevel().entities, selEntity,
+    (e, i) => `${i + 1}. ${e.role}${e.role === "player" ? " p" + e.playerIndex : ""} — ${e.behavior}`,
+    e => (e.pixels.find(p => p) || "#444"),
+    i => { selEntity = i; renderEntFields(); drawSpriteGrid(); renderEntList(); },
+    i => { if (curLevel().entities.length <= 1) return; curLevel().entities.splice(i, 1); if (selEntity >= curLevel().entities.length) selEntity = curLevel().entities.length - 1; renderEntList(); renderEntFields(); drawSpriteGrid(); persist(); });
+}
+document.getElementById("entAdd").onclick = () => {
+  if (curLevel().entities.length >= 32) return;
+  curLevel().entities.push(newEntity("enemy"));
+  selEntity = curLevel().entities.length - 1;
+  renderEntList(); renderEntFields(); drawSpriteGrid(); persist();
+};
+
+function drawSpriteGrid() {
+  const e = curEntity();
+  const n = e.spriteSize;
+  sCell = Math.max(10, Math.floor(340 / n));
+  sGrid.width = sGrid.height = n * sCell;
+  sCtx.clearRect(0, 0, sGrid.width, sGrid.height);
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const c = e.pixels[y * n + x];
+      if (c) { sCtx.fillStyle = c; sCtx.fillRect(x * sCell, y * sCell, sCell, sCell); }
+    }
+  sCtx.strokeStyle = "rgba(80,100,255,.25)";
+  for (let i = 0; i <= n; i++) {
+    sCtx.beginPath(); sCtx.moveTo(i * sCell, 0); sCtx.lineTo(i * sCell, n * sCell); sCtx.stroke();
+    sCtx.beginPath(); sCtx.moveTo(0, i * sCell); sCtx.lineTo(n * sCell, i * sCell); sCtx.stroke();
+  }
+  persist();
+}
+function sCellAt(ev) {
+  const r = sGrid.getBoundingClientRect();
+  const n = curEntity().spriteSize;
+  const x = Math.floor((ev.clientX - r.left) / sCell), y = Math.floor((ev.clientY - r.top) / sCell);
+  return (x >= 0 && y >= 0 && x < n && y < n) ? y * n + x : -1;
+}
+function sApply(i) {
+  const e = curEntity();
+  const n = e.spriteSize;
+  if (i < 0) return;
+  if (sTool === "spaint") e.pixels[i] = sColor;
+  else if (sTool === "serase") e.pixels[i] = null;
+  else if (sTool === "spick") { if (e.pixels[i]) { sColor = e.pixels[i]; setSTool("spaint"); } return; }
+  else if (sTool === "sfill") {
+    const target = e.pixels[i], fill = sColor;
+    if (target === fill) return;
+    const st = [i];
+    while (st.length) {
+      const j = st.pop();
+      if (j < 0 || j >= n * n || e.pixels[j] !== target) continue;
+      e.pixels[j] = fill;
+      const x = j % n;
+      if (x > 0) st.push(j - 1);
+      if (x < n - 1) st.push(j + 1);
+      st.push(j - n, j + n);
+    }
+  }
+  drawSpriteGrid(); renderEntList();
+}
+let sPainting = false;
+sGrid.addEventListener("mousedown", e => { sUndo.push([...curEntity().pixels]); if (sUndo.length > 64) sUndo.shift(); sPainting = true; sApply(sCellAt(e)); });
+sGrid.addEventListener("mousemove", e => { if (sPainting && (sTool === "spaint" || sTool === "serase")) sApply(sCellAt(e)); });
+window.addEventListener("mouseup", () => sPainting = false);
+function setSTool(t) {
+  sTool = t;
+  for (const b of ["spaint", "serase", "sfill", "spick"])
+    document.getElementById("t-" + b).classList.toggle("active", b === t);
+}
+for (const t of ["spaint", "serase", "sfill", "spick"]) document.getElementById("t-" + t).onclick = () => setSTool(t);
+function renderSwatches() {
+  const box = document.getElementById("spriteSwatches");
+  box.innerHTML = "";
+  spritePalette.forEach((c, i) => {
+    const d = document.createElement("div");
+    d.className = "sw" + (i === sSel ? " sel" : "");
+    d.style.background = c;
+    d.onclick = () => { sSel = i; sColor = c; setSTool("spaint"); renderSwatches(); };
+    d.oncontextmenu = ev => { ev.preventDefault(); spritePalette[i] = document.getElementById("spriteCustom").value; sSel = i; sColor = spritePalette[i]; renderSwatches(); };
+    box.appendChild(d);
+  });
+}
+document.getElementById("spriteSize").onchange = e => {
+  const e0 = curEntity(); const n = Number(e.target.value);
+  e0.spriteSize = n; e0.pixels = blankSprite(n);
+  drawSpriteGrid(); renderEntList();
+};
+window.addEventListener("keydown", e => {
+  if (e.key === "u" && sUndo.length && document.getElementById("tab-entities").classList.contains("active")) { curEntity().pixels = sUndo.pop(); drawSpriteGrid(); }
+});
+
+/* Entity fields (role/behavior/position/collision) */
+function renderEntFields() {
+  const box = document.getElementById("entFields");
+  box.innerHTML = "";
+  const e = curEntity();
+  document.getElementById("spriteSize").value = String(e.spriteSize);
+
+  const section = (text) => { const l = document.createElement("label"); l.textContent = text; l.style.marginTop = "6px"; box.appendChild(l); };
+  const numField = (labelText, key, obj = e) => {
+    const l = document.createElement("label"); l.textContent = labelText;
+    const inp = document.createElement("input"); inp.type = "number"; inp.value = obj[key];
+    inp.oninput = () => { obj[key] = Number(inp.value); renderEntList(); persist(); };
+    box.append(l, inp);
+  };
+  const selectField = (labelText, key, options, obj = e, onChange) => {
+    const l = document.createElement("label"); l.textContent = labelText;
+    const sel = document.createElement("select");
+    for (const [v, t] of options) { const o = document.createElement("option"); o.value = v; o.textContent = t; if (obj[key] === v) o.selected = true; sel.appendChild(o); }
+    sel.onchange = () => { obj[key] = sel.value; renderEntList(); persist(); if (onChange) onChange(); };
+    box.append(l, sel);
+  };
+
+  section("ROLE");
+  selectField("", "role", [["player", "PLAYER"], ["enemy", "ENEMY"], ["pickup", "PICKUP"]], e, renderEntFields);
+  if (e.role === "player") numField("PLAYER INDEX (0 or 1)", "playerIndex");
+
+  section("POSITION");
+  numField("X", "x"); numField("Y", "y");
+
+  section("BEHAVIOR");
+  selectField("", "behavior", [
+    ["static", "STATIC (never moves)"], ["playerMove", "PLAYER MOVE (pad input)"],
+    ["bounce", "BOUNCE (edges)"], ["home", "HOME (chase the player)"], ["patrol", "PATROL (waypoints)"],
+  ], e, renderEntFields);
+  if (e.behavior === "playerMove") numField("SPEED (px/frame)", "speed");
+  if (e.behavior === "bounce") { numField("VX", "vx"); numField("VY", "vy"); }
+  if (e.behavior === "home") numField("SPEED (px/frame)", "speed");
+  if (e.behavior === "patrol") { numField("SPEED (px/frame)", "speed"); numField("WAYPOINT 2 X", "patrolX2"); numField("WAYPOINT 2 Y", "patrolY2"); }
+
+  if (e.role !== "player") {
+    section("ON PLAYER HIT");
+    selectField("", "effect", [
+      ["none", "NOTHING"], ["score", "SCORE"], ["loseLife", "LOSE A LIFE"],
+      ["win", "WIN THE GAME"], ["gameover", "GAME OVER"],
+    ], e.onPlayerHit, renderEntFields);
+    if (e.onPlayerHit.effect === "score") numField("AMOUNT", "amount", e.onPlayerHit);
+    const l = document.createElement("label");
+    const chk = document.createElement("input"); chk.type = "checkbox"; chk.checked = e.onPlayerHit.removeSelf;
+    chk.onchange = () => { e.onPlayerHit.removeSelf = chk.checked; persist(); };
+    l.append(chk, document.createTextNode(" REMOVE ON HIT (pickups usually want this)"));
+    box.appendChild(l);
+  }
+}
+
+/* ──────── Rules & Session ──────── */
+function bindText(id, key) {
+  const el = document.getElementById(id);
+  el.oninput = () => { state[key] = el.value; renderProjectBar(); persist(); };
+}
+function bindNum(id, key) {
+  const el = document.getElementById(id);
+  el.oninput = () => { state[key] = Number(el.value); persist(); };
+}
+bindText("gName", "name"); bindText("gTitle", "title");
+document.getElementById("gSession").onchange = e => { state.session = e.target.value; persist(); };
+bindNum("gLives", "lives"); bindNum("gWinScore", "winScore"); bindNum("gTimeLimit", "timeLimitSec");
+
+/* Refresh every displayed field from `state` — called on load and
+ * whenever CREATE GAME / DUPLICATE / DELETE / the GAME dropdown
+ * switches which project is being edited. */
+function renderRulesFields() {
+  document.getElementById("gName").value = state.name;
+  document.getElementById("gTitle").value = state.title;
+  document.getElementById("gSession").value = state.session;
+  document.getElementById("gLives").value = state.lives;
+  document.getElementById("gWinScore").value = state.winScore;
+  document.getElementById("gTimeLimit").value = state.timeLimitSec;
+}
+/* Re-renders everything that's scoped to the current LEVEL (layers +
+ * entities) without touching the GAME bar or Rules & Session — used
+ * both on a full refresh and when just switching levels. */
+function refreshWorld() {
+  selBg = curLevel().bgLayers.length ? 0 : -1;
+  selTileLayer = curLevel().tileLayers.length ? 0 : -1;
+  selEntity = 0;
+  renderLevelBar();
+  renderBg(); renderBgEdit();
+  renderTileList(); renderTilePalette(); drawTileGrid();
+  if (curTileLayer())
+    document.getElementById("tileGridSize").value = `${curTileLayer().w}x${curTileLayer().h}x${curTileLayer().tile}`;
+  renderSwatches(); renderEntList(); renderEntFields(); drawSpriteGrid();
+}
+function refreshAll() {
+  renderProjectBar();
+  refreshWorld();
+  renderRulesFields();
+}
+
+/* ──────── Assemble + Deploy ──────── */
+function assembleLevel(lvl) {
+  return {
+    bgLayers: lvl.bgLayers.map(b => ({ color: b.color, scrollSpeed: b.scrollSpeed, bandY: b.bandY, bandH: b.bandH })),
+    tileLayers: lvl.tileLayers.map(l => ({
+      w: l.w, h: l.h, tile: l.tile, cells: l.cells,
+      colors: l.tiles.map(t => t.c),
+      solidMask: l.tiles.reduce((m, t, i) => i && t.solid ? m | (1 << i) : m, 0),
+    })),
+    entities: lvl.entities.map(e => ({
+      role: e.role, playerIndex: e.playerIndex,
+      sprite: { w: e.spriteSize, h: e.spriteSize, pixels: e.pixels },
+      x: e.x, y: e.y, w: e.w, h: e.h, vx: e.vx, vy: e.vy, speed: e.speed,
+      behavior: e.behavior, patrolX2: e.patrolX2, patrolY2: e.patrolY2,
+      onPlayerHit: e.onPlayerHit,
+    })),
+  };
+}
+function assembleGame() {
+  return {
+    name: state.name, title: state.title, session: state.session,
+    lives: state.lives, winScore: state.winScore, timeLimitSec: state.timeLimitSec,
+    levels: state.levels.map(assembleLevel),
+  };
+}
+document.getElementById("showJson").onclick = () => {
+  document.getElementById("jsonOut").value = JSON.stringify(assembleGame(), null, 1);
+};
+document.getElementById("copyJson").onclick = () => navigator.clipboard.writeText(document.getElementById("jsonOut").value);
+
+{ const ip = localStorage.getItem("arcade-builder-ip"); if (ip) document.getElementById("dIp").value = ip;
+  const port = localStorage.getItem("arcade-builder-port"); if (port) document.getElementById("dPort").value = port; }
+
+document.getElementById("deployBtn").onclick = async () => {
+  const status = document.getElementById("deployStatus");
+  const ip = document.getElementById("dIp").value, port = document.getElementById("dPort").value;
+  localStorage.setItem("arcade-builder-ip", ip);
+  localStorage.setItem("arcade-builder-port", port);
+  status.textContent = "Building and deploying...";
+  status.className = "";
+  try {
+    const res = await fetch("/build", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game: assembleGame(), target: { ip, port: Number(port) } }),
+    });
+    const j = await res.json();
+    if (j.ok) {
+      status.textContent = `Deployed ${j.file} (${j.bytes} bytes) to ${ip}:${port} — check the launcher carousel.`;
+      status.className = "status-ok";
+    } else {
+      status.textContent = `Failed at "${j.stage}": ${j.error}`;
+      status.className = "status-err";
+    }
+  } catch (e) {
+    status.textContent = "Could not reach the local build bridge: " + e;
+    status.className = "status-err";
+  }
+};
+
+/* ──────── Initial render ──────── */
+refreshAll();
+</script>
+</body>
+</html>

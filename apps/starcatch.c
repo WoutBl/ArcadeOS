@@ -11,6 +11,8 @@
 #include "../sdk/arcade.h"
 #include "../libc/syscall.h"
 
+ARCADE_GAME("Star Catcher");
+
 /* ──────── Sprites (8x8, 0x00RRGGBB, __ = transparent) ──────── */
 
 #define __ SURF_TRANSPARENT

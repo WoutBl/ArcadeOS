@@ -55,7 +55,7 @@ LIBC_SOURCES = libc/syscall.c libc/stdio.c libc/string.c libc/console.c
 LIBC_OBJECTS = $(patsubst libc/%.c,$(BUILD)/libc_%.o,$(LIBC_SOURCES))
 
 # Game SDK (libarcade = SDK framework + libc in one archive)
-SDK_OBJECTS = $(BUILD)/sdk_arcade.o
+SDK_OBJECTS = $(BUILD)/sdk_arcade.o $(BUILD)/sdk_arcade_builder.o
 
 # Games / apps shipped on the FAT32 volume
 APPS = $(BUILD)/launcher.elf $(BUILD)/pong.elf $(BUILD)/snake.elf $(BUILD)/breakout.elf $(BUILD)/starcatch.elf $(BUILD)/blaster.elf
@@ -115,13 +115,19 @@ $(BUILD)/libc_%.o: libc/%.c $(wildcard libc/*.h) include/console_abi.h | $(BUILD
 $(BUILD)/sdk_arcade.o: sdk/arcade.c sdk/arcade.h | $(BUILD)
 	$(CC) -c -Os -ffreestanding -Wall -Wextra $(NOFPU) sdk/arcade.c -o $@
 
+$(BUILD)/sdk_arcade_builder.o: sdk/arcade_builder.c sdk/arcade_builder.h sdk/arcade.h | $(BUILD)
+	$(CC) -c -Os -ffreestanding -Wall -Wextra $(NOFPU) sdk/arcade_builder.c -o $@
+
 # Create the game SDK archive (framework + libc)
 $(BUILD)/libarcade.a: $(SDK_OBJECTS) $(LIBC_OBJECTS)
 	$(AR) rcs $@ $(SDK_OBJECTS) $(LIBC_OBJECTS)
 
-# Compile Ring 3 User Apps
+# Compile Ring 3 User Apps, then append the display-title trailer
+# (tools/pack_title.py; see sdk/arcade.h's ARCADE_GAME macro) so the
+# launcher and REST API show a real name instead of the 8.3 filename.
 $(BUILD)/%.elf: apps/%.c $(BUILD)/libarcade.a sdk/arcade.h $(wildcard libc/*.h) | $(BUILD)
 	$(CC) -Os -s -ffreestanding -nostdlib -fno-builtin $(NOFPU) $< $(BUILD)/libarcade.a -o $@ $(APP_LDFLAGS)
+	python3 tools/pack_title.py $@ $<
 
 # Create the bootable FAT32 game volume: bootloader + kernel in the
 # reserved sectors, launcher + games in the root directory

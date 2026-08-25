@@ -8,6 +8,8 @@
 #include "../sdk/arcade.h"
 #include "../libc/syscall.h"
 
+ARCADE_GAME("Breakout");
+
 /* Brick Grid Config
  * Only the row/column counts are compile-time; the pixel geometry is
  * derived from the real screen size in main() (gfx_info), because

@@ -99,8 +99,10 @@ static void draw_menu(int row, int gsel, int n_rewind) {
     fb_overlay_text(x + 44, ey, "QUIT TO LAUNCHER",
                     row == 3 ? 0xFF9078 : 0x96A0C8, 2);
 
-    fb_overlay_text(x + 24, y + h - 18, "A: SELECT   B: RESUME",
-                    0x5A64A0, 1);
+    fb_overlay_button(PAD_BTN_A, x + 24, y + h - 20, 1);
+    fb_overlay_text(x + 36, y + h - 18, "SELECT", 0x5A64A0, 1);
+    fb_overlay_button(PAD_BTN_B, x + 96, y + h - 20, 1);
+    fb_overlay_text(x + 108, y + h - 18, "RESUME", 0x5A64A0, 1);
 }
 
 /* SYS_EXIT semantics without the game's cooperation */

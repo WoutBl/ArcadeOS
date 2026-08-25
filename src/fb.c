@@ -4,6 +4,7 @@
 
 #include "fb.h"
 #include "serial.h"
+#include "psglyphs.h"
 
 static int      fb_present = 0;
 static uint32_t fb_addr    = 0;
@@ -167,4 +168,26 @@ void fb_overlay_image(int x, int y, int w, int h, const uint32_t* px) {
     overlay_image_on(fb_ptr(), x, y, w, h, px);
     if (fb_ptr_back() != fb_ptr())
         overlay_image_on(fb_ptr_back(), x, y, w, h, px);
+}
+
+static void overlay_button_on(uint32_t* fb, int x, int y, int scale,
+                              const ps_glyph_t* g) {
+    uint32_t pitch = fb_p / 4;
+    for (int r = 0; r < PS_GLYPH_SIZE; r++)
+        for (int c = 0; c < PS_GLYPH_SIZE; c++) {
+            if (g->rows[r][c] != '#') continue;
+            for (int sy = 0; sy < scale; sy++)
+                for (int sx = 0; sx < scale; sx++)
+                    fb[(uint32_t)(y + r * scale + sy) * pitch
+                       + (uint32_t)(x + c * scale + sx)] = g->color;
+        }
+}
+
+void fb_overlay_button(int btn, int x, int y, int scale) {
+    if (!fb_present || scale < 1) return;
+    const ps_glyph_t* g = ps_glyph_for_button((unsigned int)btn);
+    if (!g) return;
+    overlay_button_on(fb_ptr(), x, y, scale, g);
+    if (fb_ptr_back() != fb_ptr())
+        overlay_button_on(fb_ptr_back(), x, y, scale, g);
 }

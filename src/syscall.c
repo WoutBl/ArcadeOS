@@ -569,6 +569,30 @@ static void syscall_handler(registers_t* regs) {
             break;
         }
 
+        case SYS_PAD_ASSIGN: {
+            /* EBX = pad_assign_req_t*. LIST reports every source's
+             * connection + assignment; SET reassigns one. Launcher-only
+             * in practice, but any Ring-3 caller may use it. */
+            pad_assign_req_t* rq = (pad_assign_req_t*)regs->ebx;
+            if (!uwr(rq, sizeof(pad_assign_req_t))) { regs->eax = (uint32_t)-1; break; }
+
+            if (rq->op == PAD_ASSIGN_OP_LIST) {
+                for (int i = 0; i < PAD_NUM_SOURCES; i++) {
+                    rq->connected[i] = (uint8_t)gamepad_source_connected(i);
+                    rq->slot[i]      = (int8_t)gamepad_assignment(i);
+                    gamepad_source_label(i, rq->label[i], PAD_SOURCE_LABEL_LEN);
+                }
+                rq->any_pressed = gamepad_any_latched();
+                regs->eax = 0;
+            } else if (rq->op == PAD_ASSIGN_OP_SET) {
+                gamepad_assign((int)rq->set_source, (int)rq->set_slot);
+                regs->eax = 0;
+            } else {
+                regs->eax = (uint32_t)-1;
+            }
+            break;
+        }
+
         case SYS_DEMO_SAVE: {
             /* Launcher: persist the just-played game's captured demo. */
             const char* name = (const char*)regs->ebx;

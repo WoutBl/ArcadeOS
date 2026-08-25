@@ -16,6 +16,9 @@
  *   GET /api/games   – *.ELF files on the game volume
  *   GET /api/scores  – parsed *.SAV high scores
  *   GET /api/log     – kernel log ring (text/plain)
+ *   POST /api/upload?name=X.ELF – write the request body to /games/X.ELF
+ *        live, no image rebuild (dev/LAN use only: no auth, plain
+ *        overwrite — same trust level as physically swapping the disk).
  *
  * Everything is pumped from net_poll() in the idle task.
  */
@@ -28,6 +31,7 @@
 #include "clock.h"
 #include "klog.h"
 #include "fat32.h"
+#include "gamemeta.h"
 #include "session.h"
 #include "vfs.h"
 #include "pmm.h"
@@ -125,12 +129,24 @@ static struct {
     uint8_t  peer_ip[4];
     uint16_t peer_port;
     uint32_t snd_nxt, rcv_nxt;
-    char     req[1024];
+    char     req[2048];        /* Headers + the start of a POST body */
     uint32_t req_len;
+
+    /* POST /api/upload in progress: once headers are parsed, further
+     * segments land straight in upload_buf instead of req. */
+    int      uploading;
+    uint32_t content_len;
+    uint32_t body_have;
+    char     upload_name[64];
 } conn;
 
 static uint8_t frame_out[FRAME_MAX];
 static uint8_t frame_in[FRAME_MAX];
+
+/* Live game upload staging (POST /api/upload) — sized well above any
+ * built-in game (~25 KB) with headroom for bigger ones down the line. */
+#define UPLOAD_MAX (256 * 1024)
+static uint8_t upload_buf[UPLOAD_MAX];
 
 /* ──────── ARP cache (learned from every ARP we see) ──────── */
 #define ARP_CACHE 4
@@ -392,6 +408,26 @@ static int name_ends_with(const char* name, const char* suffix) {
     return n > s && strcmp(name + n - s, suffix) == 0;
 }
 
+/* Real display title from the trailer tools/pack_title.py appends
+ * (see include/gamemeta.h), or the 8.3 filename with ".ELF" stripped
+ * when a file doesn't have one. */
+static void game_display_title(vfs_node_t* file, const char* filename,
+                                char* out, int cap) {
+    if (file && file->length >= ARCADE_META_SIZE) {
+        uint8_t trailer[ARCADE_META_SIZE];
+        if (vfs_read(file, file->length - ARCADE_META_SIZE, ARCADE_META_SIZE,
+                     trailer) == ARCADE_META_SIZE &&
+            memcmp(trailer, ARCADE_META_MAGIC, 4) == 0) {
+            strncpy(out, (const char*)trailer + 4, cap - 1);
+            out[cap - 1] = '\0';
+            return;
+        }
+    }
+    int n = 0;
+    while (filename[n] && filename[n] != '.' && n < cap - 1) { out[n] = filename[n]; n++; }
+    out[n] = '\0';
+}
+
 static uint32_t build_games(char* p0) {
     char* p = p0;
     p = sappend(p, "{\"games\":[");
@@ -406,10 +442,15 @@ static uint32_t build_games(char* p0) {
             uint32_t size = 0;
             vfs_node_t* child = vfs_finddir(dir, de->name);
             if (child) size = child->length;
+            char title[ARCADE_META_TITLE_LEN];
+            game_display_title(child, de->name, title, sizeof(title));
+
             if (!first) p = sappend(p, ",");
             first = 0;
             p = sappend(p, "{\"file\":\"");
             p = sappend(p, de->name);
+            p = sappend(p, "\",\"title\":\"");
+            p = sappend(p, title);
             p = sappend(p, "\",\"bytes\":");
             p = sappend_u(p, size);
             p = sappend(p, "}");
@@ -561,18 +602,165 @@ static uint32_t http_route(const char* path, const char** ctype, int* status) {
     return (uint32_t)(sappend(body_buf, "{\"error\":\"not found\"}\n") - body_buf);
 }
 
-/* Parse the buffered request and stream the response + FIN */
-static void http_respond(void) {
-    /* Request line: METHOD SP PATH SP ... */
-    char path[128];
-    uint32_t n = 0;
-    const char* q = conn.req;
-    int is_get = (conn.req_len >= 4 && strncmp(q, "GET ", 4) == 0);
-    q += 4;
-    while (is_get && *q && *q != ' ' && *q != '?' && *q != '\r' && n < sizeof(path) - 1)
-        path[n++] = *q++;
-    path[n] = '\0';
+static const char* status_line(int status) {
+    switch (status) {
+        case 200: return "HTTP/1.1 200 OK\r\n";
+        case 400: return "HTTP/1.1 400 Bad Request\r\n";
+        case 404: return "HTTP/1.1 404 Not Found\r\n";
+        case 500: return "HTTP/1.1 500 Internal Server Error\r\n";
+        default:  return "HTTP/1.1 405 Method Not Allowed\r\n";
+    }
+}
 
+/* Send whatever is staged in body_buf[0..blen) as the response, then FIN */
+static void send_http_response(int status, const char* ctype, uint32_t blen) {
+    char* h = head_buf;
+    h = sappend(h, status_line(status));
+    h = sappend(h, "Content-Type: ");
+    h = sappend(h, ctype);
+    h = sappend(h, "\r\nContent-Length: ");
+    h = sappend_u(h, blen);
+    h = sappend(h, "\r\nConnection: close\r\nServer: ArcadeOS\r\n\r\n");
+    uint32_t hlen = (uint32_t)(h - head_buf);
+
+    /* Stream: headers, then the body in MSS-sized segments, then FIN */
+    tcp_send(TCP_ACK | TCP_PSH, head_buf, hlen);
+    uint32_t off = 0;
+    while (off < blen) {
+        uint32_t chunk = blen - off;
+        if (chunk > SEG_DATA) chunk = SEG_DATA;
+        tcp_send(TCP_ACK | TCP_PSH, body_buf + off, chunk);
+        off += chunk;
+    }
+    tcp_send(TCP_ACK | TCP_FIN, 0, 0);
+    conn.state = TCP_FIN_SENT;
+}
+
+/* ──────── POST /api/upload — push a file to /games without a rebuild ──────── */
+
+static int req_method_is(const char* m) {
+    int n = (int)strlen(m);
+    return conn.req_len > (uint32_t)n && strncmp(conn.req, m, n) == 0 &&
+           conn.req[n] == ' ';
+}
+
+/* Request-line target (path+query), stopping at the next SP or CR */
+static void req_target(char* out, int cap) {
+    const char* q = conn.req;
+    while (*q && *q != ' ') q++;
+    if (*q == ' ') q++;
+    int n = 0;
+    while (*q && *q != ' ' && *q != '\r' && n < cap - 1) out[n++] = *q++;
+    out[n] = '\0';
+}
+
+/* First value of "key=" in a '&'-joined query string */
+static int query_param(const char* query, const char* key, char* out, int cap) {
+    int klen = (int)strlen(key);
+    const char* p = query;
+    while (*p) {
+        if (strncmp(p, key, klen) == 0 && p[klen] == '=') {
+            p += klen + 1;
+            int n = 0;
+            while (*p && *p != '&' && n < cap - 1) out[n++] = *p++;
+            out[n] = '\0';
+            return n > 0;
+        }
+        while (*p && *p != '&') p++;
+        if (*p == '&') p++;
+    }
+    return 0;
+}
+
+/* Value of a "Name: 123" header line within the buffered request */
+static long header_int(const char* name) {
+    int nlen = (int)strlen(name);
+    for (const char* p = conn.req; (p = strstr_simple(p, name)); p += nlen) {
+        if (p != conn.req && p[-1] != '\n') continue;   /* Mid-line match */
+        p += nlen;
+        while (*p == ':' || *p == ' ') p++;
+        long v = 0; int any = 0;
+        while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; any = 1; }
+        return any ? v : -1;
+    }
+    return -1;
+}
+
+/* The full upload body has landed in upload_buf: write it and respond */
+static void http_finish_upload(void) {
+    int ok = (fat32_save(conn.upload_name, upload_buf, conn.content_len) == 0);
+
+    char* p = body_buf;
+    p = sappend(p, "{\"ok\":");
+    p = sappend(p, ok ? "true" : "false");
+    p = sappend(p, ",\"name\":\"");
+    p = sappend(p, conn.upload_name);
+    p = sappend(p, "\",\"bytes\":");
+    p = sappend_u(p, conn.content_len);
+    p = sappend(p, "}\n");
+    uint32_t blen = (uint32_t)(p - body_buf);
+
+    char line[128];
+    char* l = line;
+    l = sappend(l, "[HTTP] POST /api/upload -> ");
+    l = sappend(l, conn.upload_name);
+    l = sappend(l, ok ? " OK (" : " FAILED (");
+    l = sappend_u(l, conn.content_len);
+    l = sappend(l, " bytes)\n");
+    *l = '\0';
+    serial_write(line);
+
+    conn.uploading = 0;
+    send_http_response(ok ? 200 : 500, "application/json", blen);
+}
+
+/* Parse the buffered request and either respond or arm an upload */
+static void http_respond(void) {
+    char target[160], path[128], query[96];
+    query[0] = '\0';
+    req_target(target, sizeof(target));
+    {
+        char* t = target;
+        int n = 0;
+        while (*t && *t != '?' && n < (int)sizeof(path) - 1) path[n++] = *t++;
+        path[n] = '\0';
+        if (*t == '?') strncpy(query, t + 1, sizeof(query) - 1);
+    }
+
+    if (req_method_is("POST") && strcmp(path, "/api/upload") == 0) {
+        char name[64];
+        long clen = header_int("Content-Length");
+        if (!query_param(query, "name", name, sizeof(name)) ||
+            clen <= 0 || (uint32_t)clen > sizeof(upload_buf)) {
+            uint32_t blen = (uint32_t)(sappend(body_buf,
+                "{\"error\":\"need ?name=X.ELF and a valid Content-Length\"}\n")
+                - body_buf);
+            send_http_response(400, "application/json", blen);
+            return;
+        }
+
+        strcpy(conn.upload_name, name);
+        conn.content_len = (uint32_t)clen;
+
+        /* Body bytes that rode in on the same segment as the header
+         * terminator are already sitting in conn.req — seed upload_buf
+         * with them before switching subsequent segments over to it. */
+        const char* body_start = strstr_simple(conn.req, "\r\n\r\n") + 4;
+        uint32_t already = (uint32_t)((conn.req + conn.req_len) - body_start);
+        if (already > conn.content_len) already = conn.content_len;
+        memcpy(upload_buf, body_start, already);
+        conn.body_have = already;
+
+        if (conn.body_have >= conn.content_len) {
+            http_finish_upload();
+        } else {
+            conn.uploading = 1;
+            tcp_send(TCP_ACK, 0, 0);
+        }
+        return;
+    }
+
+    int is_get = req_method_is("GET");
     const char* ctype = "application/json";
     int status = 405;
     uint32_t blen;
@@ -597,28 +785,7 @@ static void http_respond(void) {
         serial_write(line);
     }
 
-    char* h = head_buf;
-    h = sappend(h, status == 200 ? "HTTP/1.1 200 OK\r\n"
-              : status == 404 ? "HTTP/1.1 404 Not Found\r\n"
-                              : "HTTP/1.1 405 Method Not Allowed\r\n");
-    h = sappend(h, "Content-Type: ");
-    h = sappend(h, ctype);
-    h = sappend(h, "\r\nContent-Length: ");
-    h = sappend_u(h, blen);
-    h = sappend(h, "\r\nConnection: close\r\nServer: ArcadeOS\r\n\r\n");
-    uint32_t hlen = (uint32_t)(h - head_buf);
-
-    /* Stream: headers, then the body in MSS-sized segments, then FIN */
-    tcp_send(TCP_ACK | TCP_PSH, head_buf, hlen);
-    uint32_t off = 0;
-    while (off < blen) {
-        uint32_t chunk = blen - off;
-        if (chunk > SEG_DATA) chunk = SEG_DATA;
-        tcp_send(TCP_ACK | TCP_PSH, body_buf + off, chunk);
-        off += chunk;
-    }
-    tcp_send(TCP_ACK | TCP_FIN, 0, 0);
-    conn.state = TCP_FIN_SENT;
+    send_http_response(status, ctype, blen);
 }
 
 /* ──────── ARP cache + resolution ──────── */
@@ -886,6 +1053,7 @@ static void handle_tcp(const eth_hdr_t* eth, const ip_hdr_t* ip,
         conn.rcv_nxt   = seq + 1;
         conn.snd_nxt   = system_ticks * 7919 + 12345;    /* "ISN" */
         conn.req_len   = 0;
+        conn.uploading = 0;
         conn.state     = TCP_SYN_RCVD;
         tcp_send(TCP_SYN | TCP_ACK, 0, 0);
         return;
@@ -906,16 +1074,29 @@ static void handle_tcp(const eth_hdr_t* eth, const ip_hdr_t* ip,
             if (data_len > 0 && seq == conn.rcv_nxt) {
                 conn.rcv_nxt += data_len;
 
-                uint32_t space = sizeof(conn.req) - 1 - conn.req_len;
-                uint32_t take = (data_len < space) ? data_len : space;
-                memcpy(conn.req + conn.req_len, data, take);
-                conn.req_len += take;
-                conn.req[conn.req_len] = '\0';
+                if (conn.uploading) {
+                    /* Headers are done; every byte from here is body */
+                    uint32_t space = sizeof(upload_buf) - conn.body_have;
+                    uint32_t take = (data_len < space) ? data_len : space;
+                    memcpy(upload_buf + conn.body_have, data, take);
+                    conn.body_have += take;
 
-                if (strstr_simple(conn.req, "\r\n\r\n")) {
-                    http_respond();          /* Sends data + FIN */
+                    if (conn.body_have >= conn.content_len)
+                        http_finish_upload();       /* Sends data + FIN */
+                    else
+                        tcp_send(TCP_ACK, 0, 0);
                 } else {
-                    tcp_send(TCP_ACK, 0, 0);
+                    uint32_t space = sizeof(conn.req) - 1 - conn.req_len;
+                    uint32_t take = (data_len < space) ? data_len : space;
+                    memcpy(conn.req + conn.req_len, data, take);
+                    conn.req_len += take;
+                    conn.req[conn.req_len] = '\0';
+
+                    if (strstr_simple(conn.req, "\r\n\r\n")) {
+                        http_respond();          /* May respond, or arm an upload */
+                    } else {
+                        tcp_send(TCP_ACK, 0, 0);
+                    }
                 }
             }
             if (tcp->flags & TCP_FIN) {      /* Peer gave up early */

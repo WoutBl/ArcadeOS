@@ -114,7 +114,7 @@ void usb_announce_device(usb_device_t* dev) {
 
     if (dev->vendor_id == 0x054C &&
         (dev->product_id == 0x05C4 || dev->product_id == 0x09CC)) {
-        terminal_writestring("[USB] DualShock 4 detected - mapping to pad 0\n");
+        terminal_writestring("[USB] DualShock 4 detected\n");
     }
 }
 
@@ -142,8 +142,11 @@ static int16_t ds4_axis(uint8_t v) {
  *   byte 7: [0] PS button [1] touchpad click
  *   byte 8: L2 analog      byte 9: R2 analog
  */
-static void ds4_decode(const uint8_t* d, int len) {
+static void ds4_decode(const usb_device_t* dev, const uint8_t* d, int len) {
     if (len < 10 || d[0] != 0x01) return;
+
+    int source = gamepad_usb_source_for_addr(dev->addr);
+    if (source < 0) return;   /* Both USB pad slots already taken */
 
     /* One-time confirmation that the input pipe is alive */
     static int announced = 0;
@@ -182,7 +185,7 @@ static void ds4_decode(const uint8_t* d, int len) {
     if (d[6] & 0x40) buttons |= PAD_BTN_L3;
     if (d[6] & 0x80) buttons |= PAD_BTN_R3;
 
-    gamepad_feed_usb(0, buttons,
+    gamepad_feed_usb(source, buttons,
                      ds4_axis(d[1]), ds4_axis(d[2]),
                      ds4_axis(d[3]), ds4_axis(d[4]),
                      d[8], d[9]);
@@ -271,7 +274,7 @@ static void bootkbd_decode(const uint8_t* d, int len) {
  */
 void usb_hid_input(usb_device_t* dev, const uint8_t* data, int len) {
     if (is_dualshock4(dev)) {
-        ds4_decode(data, len);
+        ds4_decode(dev, data, len);
         return;
     }
     if (dev->dev_class == USB_CLASS_HID && len == 8) {

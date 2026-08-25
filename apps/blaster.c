@@ -16,6 +16,8 @@
 #include "../sdk/arcade.h"
 #include "../libc/syscall.h"
 
+ARCADE_GAME("Blaster");
+
 #define MAX_SHOTS   12
 #define MAX_FOES    16
 #define PLAYER_SIZE 18

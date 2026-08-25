@@ -14,6 +14,7 @@
 #include "../sdk/arcade.h"
 #include "../libc/syscall.h"
 #include "../libc/string.h"
+#include "../include/gamemeta.h"
 
 #define MAX_GAMES 16
 
@@ -45,7 +46,7 @@ typedef struct {
 static users_t users;
 
 /* Which screen the launcher is on */
-enum { SCR_HOME, SCR_USERS, SCR_NAME, SCR_SCORES };
+enum { SCR_HOME, SCR_USERS, SCR_NAME, SCR_SCORES, SCR_CONTROLLERS };
 static int screen = SCR_HOME;
 
 /* ──────── Central highscores (written by the kernel) ──────── */
@@ -122,18 +123,49 @@ static void fmt_u(char* out, unsigned int v) {
     out[n] = '\0';
 }
 
-/* Pretty titles: the 8.3 filesystem truncates long names, so map the
- * known ones back; everything else just loses the .ELF extension. */
-static void pretty_title(const char* file, char* out) {
-    static const char* fixups[][2] = {
-        { "STARCATC.ELF", "STARCATCH" },
-    };
-    for (unsigned int i = 0; i < sizeof(fixups)/sizeof(fixups[0]); i++) {
-        if (strcmp(file, fixups[i][0]) == 0) { strcpy(out, fixups[i][1]); return; }
+/* Scratch buffer for reading a whole game file back to check its
+ * title trailer (see below) — sized well above any built-in game. */
+#define TITLE_SCRATCH_MAX (64 * 1024)
+static uint8_t title_scratch[TITLE_SCRATCH_MAX];
+
+/* Real display title from the trailer tools/pack_title.py appends at
+ * build time (sdk/arcade.h's ARCADE_GAME macro; see include/gamemeta.h)
+ * — e.g. "STAR CATCHER" instead of the 8.3-truncated STARCATC.ELF.
+ * Falls back to the filename with ".ELF" stripped when a file (an
+ * older build, or something dropped in via /api/upload) has no
+ * trailer, so nothing ever fails to show up. */
+static void pretty_title(const char* file, unsigned int size, char* out) {
+    if (size >= ARCADE_META_SIZE && size <= sizeof(title_scratch)) {
+        int n = load_data(file, title_scratch, (int)size);
+        if (n == (int)size) {
+            const char* trailer = (const char*)title_scratch + size - ARCADE_META_SIZE;
+            if (strncmp(trailer, ARCADE_META_MAGIC, 4) == 0) {
+                strcpy(out, trailer + 4);
+                return;
+            }
+        }
     }
     int n = 0;
     while (file[n] && file[n] != '.' && n < 31) { out[n] = file[n]; n++; }
     out[n] = '\0';
+}
+
+/* Footer button hint: glyph + label, returns the x to place the next one */
+static int draw_hint(surface_t* s, int x, int y, int btn, const char* label,
+                     uint32_t color) {
+    arcade_draw_button(s, btn, x, y, 1);
+    surf_draw_text(s, x + 12, y, label, color, SURF_TRANSPARENT, 1);
+    return x + 12 + (int)strlen(label) * 8 + 20;
+}
+
+/* A muted, per-title pseudo-random color for the XMB-style game tiles
+ * (no game art yet, so the tile itself has to carry some identity). */
+static uint32_t tile_color(const char* title) {
+    uint32_t h = 2166136261u;
+    for (const char* p = title; *p; p++) h = (h ^ (uint32_t)(uint8_t)*p) * 16777619u;
+    return rgb((uint8_t)(50 + (h & 0x3F)),
+               (uint8_t)(50 + ((h >> 6) & 0x3F)),
+               (uint8_t)(90 + ((h >> 12) & 0x5F)));
 }
 
 static int ends_with_elf(const char* name) {
@@ -151,7 +183,7 @@ static void scan_games(void) {
         if (strcmp(de.name, "LAUNCHER.ELF") == 0) continue;
 
         strcpy(games[num_games].name, de.name);
-        pretty_title(de.name, games[num_games].title);
+        pretty_title(de.name, de.size, games[num_games].title);
         games[num_games].size = de.size;
         num_games++;
     }
@@ -183,48 +215,69 @@ static void draw_home(surface_t* s, int selected, int last_idx, unsigned int t) 
         surf_draw_text(s, s->w - 168, 46, cnt, rgb(90, 105, 170), SURF_TRANSPARENT, 1);
     }
 
-    /* Game list */
-    int y = 100;
+    /* Game carousel (XMB-style): tiles slide so the selected one stays
+     * centered under the header; LEFT/RIGHT walk the row underneath it. */
     if (num_games == 0) {
-        surf_draw_text(s, 40, y, "NO GAMES FOUND ON /games",
+        surf_draw_text(s, 40, 140, "NO GAMES FOUND ON /games",
                        rgb(255, 100, 100), SURF_TRANSPARENT, 2);
-    }
+    } else {
+        int cy = s->h / 2 + 4;                  /* Row centerline */
+        int tile = 72, gap = 24, sel_tile = 96;
+        int pulse = (int)((t / 16) % 48);
+        if (pulse > 24) pulse = 48 - pulse;
 
-    for (int i = 0; i < num_games; i++) {
-        int row_h = 40;
-        if (i == selected) {
-            /* Pulsing highlight bar */
-            int pulse = (int)((t / 16) % 64);
-            if (pulse > 32) pulse = 64 - pulse;
-            surf_fill_rect(s, 24, y - 8, s->w - 48, row_h,
-                           rgb(30, (uint8_t)(50 + pulse), 130));
-            surf_draw_rect(s, 24, y - 8, s->w - 48, row_h, rgb(120, 160, 255));
-            surf_draw_text(s, 36, y, ">", rgb(255, 220, 80), SURF_TRANSPARENT, 2);
-        }
-        surf_draw_text(s, 64, y, games[i].title,
-                       i == selected ? rgb(255, 255, 255) : rgb(150, 160, 200),
-                       SURF_TRANSPARENT, 2);
+        for (int i = 0; i < num_games; i++) {
+            int hot = (i == selected);
+            int ts  = hot ? sel_tile : tile;
+            int cx  = s->w / 2 + (i - selected) * (tile + gap);
+            int tx  = cx - ts / 2, ty = cy - ts / 2;
 
-        /* Size (KiB), right aligned; LAST PLAYED badge */
-        {
-            char kb[16];
-            unsigned int v = games[i].size / 1024;
-            if (v == 0) v = 1;
-            fmt_u(kb, v);
-            strcpy(kb + strlen(kb), " KB");
-            surf_draw_text(s, s->w - 104, y + 4, kb, rgb(90, 105, 170), SURF_TRANSPARENT, 1);
+            uint32_t base = tile_color(games[i].title);
+            if (hot)
+                surf_fill_rect(s, tx - 4, ty - 4, ts + 8, ts + 8,
+                               rgb(120, (uint8_t)(140 + pulse), 255));
+            surf_fill_rect(s, tx, ty, ts, ts, base);
+            surf_draw_rect(s, tx, ty, ts, ts,
+                           hot ? rgb(255, 255, 255) : rgb(40, 44, 80));
+
+            /* Big initial stands in for real box art */
+            char initial[2] = { games[i].title[0], '\0' };
+            int lscale = hot ? 4 : 3;
+            surf_draw_text(s, tx + ts / 2 - 4 * lscale, ty + ts / 2 - 4 * lscale,
+                           initial, hot ? rgb(255, 255, 255) : rgb(220, 220, 235),
+                           SURF_TRANSPARENT, lscale);
+
+            if (i == last_idx)
+                surf_fill_rect(s, tx + 4, ty + 4, 8, 8, rgb(255, 220, 80));
         }
-        if (i == last_idx)
-            surf_draw_text(s, s->w - 204, y + 4, "LAST PLAYED",
-                           rgb(120, 220, 160), SURF_TRANSPARENT, 1);
-        y += 48;
+
+        /* Selected game's title + size, centered under the row */
+        int tw = (int)strlen(games[selected].title) * 8 * 3;
+        surf_draw_text(s, s->w / 2 - tw / 2, cy + sel_tile / 2 + 20,
+                       games[selected].title, rgb(255, 255, 255),
+                       SURF_TRANSPARENT, 3);
+
+        char info[48];
+        unsigned int v = games[selected].size / 1024;
+        if (v == 0) v = 1;
+        fmt_u(info, v);
+        strcpy(info + strlen(info), " KB");
+        if (selected == last_idx)
+            strcpy(info + strlen(info), "  -  LAST PLAYED");
+        int iw = (int)strlen(info) * 8;
+        surf_draw_text(s, s->w / 2 - iw / 2, cy + sel_tile / 2 + 52, info,
+                       rgb(140, 220, 170), SURF_TRANSPARENT, 1);
     }
 
     /* Footer */
     surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(18, 22, 60));
-    surf_draw_text(s, 24, s->h - 24,
-                   "A(X): PLAY   Y(V): PLAYERS   X(C): SCORES",
-                   rgb(120, 140, 220), SURF_TRANSPARENT, 1);
+    {
+        int hx = 24, hy = s->h - 22;
+        hx = draw_hint(s, hx, hy, PAD_BTN_A, "PLAY", rgb(160, 180, 255));
+        hx = draw_hint(s, hx, hy, PAD_BTN_Y, "PLAYERS", rgb(160, 180, 255));
+        hx = draw_hint(s, hx, hy, PAD_BTN_X, "SCORES", rgb(160, 180, 255));
+        surf_draw_text(s, hx, hy, "L1: CONTROLLERS", rgb(160, 180, 255), SURF_TRANSPARENT, 1);
+    }
 }
 
 /* ──────── Scoreboard screen ──────── */
@@ -276,8 +329,56 @@ static void draw_scores(surface_t* s) {
     }
 
     surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(18, 40, 40));
-    surf_draw_text(s, 24, s->h - 24, "B(Z): BACK",
-                   rgb(110, 190, 150), SURF_TRANSPARENT, 1);
+    draw_hint(s, 24, s->h - 22, PAD_BTN_B, "BACK", rgb(150, 220, 180));
+}
+
+/* ──────── Controller assignment screen ────────
+ *
+ * Sources are the physical inputs (keyboard A/B + up to two USB pads);
+ * every source can be handed to P1, P2, or left unassigned. Plugging
+ * in a controller already "just works" (see gamepad.c's defaults) —
+ * this screen is for when someone wants to override that: swap seats,
+ * bench the keyboard, or free up a slot before handing a pad to a
+ * second player. */
+
+static int ctrl_sel = 0;
+
+static void draw_controllers(surface_t* s) {
+    pad_assign_req_t rq;
+    rq.op = PAD_ASSIGN_OP_LIST;
+    pad_assign_op(&rq);
+
+    surf_clear(s, rgb(10, 12, 34));
+    surf_fill_rect(s, 0, 0, s->w, 64, rgb(18, 40, 60));
+    surf_fill_rect(s, 0, 64, s->w, 3, rgb(80, 200, 220));
+    surf_draw_text(s, 24, 20, "CONTROLLERS", rgb(255, 255, 255), SURF_TRANSPARENT, 3);
+
+    int y = 100;
+    for (int i = 0; i < PAD_NUM_SOURCES; i++) {
+        int hot = (i == ctrl_sel);
+        if (hot) {
+            surf_fill_rect(s, 24, y - 8, s->w - 48, 40, rgb(20, 60, 80));
+            surf_draw_rect(s, 24, y - 8, s->w - 48, 40, rgb(100, 200, 220));
+            surf_draw_text(s, 36, y, ">", rgb(255, 220, 80), SURF_TRANSPARENT, 2);
+        }
+        surf_draw_text(s, 64, y, rq.label[i],
+                       hot ? rgb(255, 255, 255) : rgb(160, 170, 200),
+                       SURF_TRANSPARENT, 2);
+        surf_draw_text(s, s->w - 260, y + 4, rq.connected[i] ? "CONNECTED" : "NOT CONNECTED",
+                       rq.connected[i] ? rgb(120, 220, 160) : rgb(90, 100, 130),
+                       SURF_TRANSPARENT, 1);
+
+        const char* slot_label = (rq.slot[i] == 0) ? "P1" : (rq.slot[i] == 1) ? "P2" : "-";
+        surf_draw_text(s, s->w - 60, y, slot_label,
+                       rq.slot[i] >= 0 ? rgb(255, 220, 80) : rgb(90, 100, 130),
+                       SURF_TRANSPARENT, 2);
+        y += 48;
+    }
+
+    surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(18, 40, 60));
+    draw_hint(s, 24, s->h - 22, PAD_BTN_B, "BACK", rgb(140, 210, 220));
+    surf_draw_text(s, 120, s->h - 22, "LEFT/RIGHT: ASSIGN TO P1/P2/NONE",
+                   rgb(140, 210, 220), SURF_TRANSPARENT, 1);
 }
 
 /* ──────── Player-picker screen ──────── */
@@ -329,9 +430,14 @@ static void draw_users(surface_t* s) {
     }
 
     surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(30, 18, 60));
-    surf_draw_text(s, 24, s->h - 24,
-                   "A(X): PICK   SELECT(TAB): DELETE   B(Z): BACK",
-                   rgb(170, 140, 220), SURF_TRANSPARENT, 1);
+    {
+        int hx = 24, hy = s->h - 22;
+        hx = draw_hint(s, hx, hy, PAD_BTN_A, "PICK", rgb(200, 170, 255));
+        surf_draw_text(s, hx, hy, "SELECT: DELETE", rgb(200, 170, 255),
+                       SURF_TRANSPARENT, 1);
+        hx += (int)strlen("SELECT: DELETE") * 8 + 20;
+        draw_hint(s, hx, hy, PAD_BTN_B, "BACK", rgb(200, 170, 255));
+    }
 }
 
 static void user_delete(int idx) {
@@ -399,9 +505,13 @@ static void draw_name(surface_t* s) {
     }
 
     surf_fill_rect(s, 0, s->h - 36, s->w, 36, rgb(30, 18, 60));
-    surf_draw_text(s, 24, s->h - 24,
-                   "A(X): TYPE   B(Z): ERASE   START(ENTER): DONE",
-                   rgb(170, 140, 220), SURF_TRANSPARENT, 1);
+    {
+        int hx = 24, hy = s->h - 22;
+        hx = draw_hint(s, hx, hy, PAD_BTN_A, "TYPE", rgb(200, 170, 255));
+        hx = draw_hint(s, hx, hy, PAD_BTN_B, "ERASE", rgb(200, 170, 255));
+        surf_draw_text(s, hx, hy, "START: DONE", rgb(200, 170, 255),
+                       SURF_TRANSPARENT, 1);
+    }
 }
 
 /* Commit the typed name as a new user; returns its index or -1 */
@@ -501,11 +611,11 @@ int main(void) {
                 continue;
             }
 
-            if ((a.pressed & PAD_BTN_DOWN) && num_games > 0) {
+            if ((a.pressed & PAD_BTN_RIGHT) && num_games > 0) {
                 selected = (selected + 1) % num_games;
                 sfx_move();
             }
-            if ((a.pressed & PAD_BTN_UP) && num_games > 0) {
+            if ((a.pressed & PAD_BTN_LEFT) && num_games > 0) {
                 selected = (selected + num_games - 1) % num_games;
                 sfx_move();
             }
@@ -520,6 +630,11 @@ int main(void) {
                 sfx_select();
                 board_load();
                 screen = SCR_SCORES;
+            }
+            if (a.pressed & PAD_BTN_L1) {
+                sfx_select();
+                ctrl_sel = 0;
+                screen = SCR_CONTROLLERS;
             }
 
             if ((a.pressed & (PAD_BTN_A | PAD_BTN_START)) && num_games > 0) {
@@ -599,6 +714,38 @@ int main(void) {
                 screen = SCR_HOME;
             }
             draw_scores(&a.screen);
+        }
+
+        else if (screen == SCR_CONTROLLERS) {
+            /* This screen's whole job is reassigning who's P1/P2, so
+             * it must stay navigable no matter what: a.pressed2 covers
+             * a source currently sitting on P2, and any_pressed covers
+             * one that's fully unassigned (gamepad_get_state() never
+             * delivers those to any slot at all — see its comment). */
+            pad_assign_req_t rq;
+            rq.op = PAD_ASSIGN_OP_LIST;
+            pad_assign_op(&rq);
+            uint16_t pressed = (uint16_t)(a.pressed | a.pressed2 | rq.any_pressed);
+
+            if (pressed & PAD_BTN_DOWN) { ctrl_sel = (ctrl_sel + 1) % PAD_NUM_SOURCES; sfx_move(); }
+            if (pressed & PAD_BTN_UP)   { ctrl_sel = (ctrl_sel + PAD_NUM_SOURCES - 1) % PAD_NUM_SOURCES; sfx_move(); }
+            if (pressed & (PAD_BTN_LEFT | PAD_BTN_RIGHT)) {
+                int next = rq.slot[ctrl_sel] + ((pressed & PAD_BTN_RIGHT) ? 1 : -1);
+                if (next > 1)  next = -1;
+                if (next < -1) next = 1;
+
+                pad_assign_req_t set;
+                set.op = PAD_ASSIGN_OP_SET;
+                set.set_source = ctrl_sel;
+                set.set_slot = next;
+                pad_assign_op(&set);
+                sfx_move();
+            }
+            if (pressed & (PAD_BTN_B | PAD_BTN_START)) {
+                sfx_move();
+                screen = SCR_HOME;
+            }
+            draw_controllers(&a.screen);
         }
 
         else { /* SCR_NAME */

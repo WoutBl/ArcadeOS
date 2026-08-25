@@ -27,6 +27,20 @@
 
 #include "../libc/console.h"
 
+/* ──────── Display title (see include/gamemeta.h) ────────
+ *
+ * Declare your game's real name once, near the top of the file:
+ *
+ *     ARCADE_GAME("Star Catcher");
+ *
+ * tools/pack_title.py reads this string at build time (it compiles to
+ * nothing — the game never sees it at runtime) and appends it to the
+ * ELF as a small trailer, so the launcher and the REST API can show
+ * "STAR CATCHER" instead of guessing from the 8.3-truncated filename
+ * STARCATC.ELF. Optional: no declaration just falls back to the
+ * filename. */
+#define ARCADE_GAME(title)
+
 /* ──────── Fixed-point math (24.8, like the built-in games) ──────── */
 
 typedef int32_t fx_t;
@@ -42,6 +56,10 @@ typedef struct {
 } sprite_t;
 
 void arcade_draw_sprite(surface_t* s, const sprite_t* spr, int x, int y, int scale);
+
+/* PlayStation-style face-button icon (Cross/Circle/Square/Triangle) for
+ * on-screen prompts — pass PAD_BTN_A/B/X/Y. No-op for any other button. */
+void arcade_draw_button(surface_t* s, int btn, int x, int y, int scale);
 
 /* ──────── Entities: position/velocity in fixed-point ──────── */
 

@@ -49,6 +49,7 @@ int net_op(net_req_t* rq);
 /* Active-player session (SYS_SESSION): the launcher SETs who plays,
  * games GET it for name tags. See session_req_t in console_abi.h. */
 int session_op(session_req_t* rq);
+int pad_assign_op(pad_assign_req_t* rq);
 
 /* Poll for a beamed game to launch (launcher only). */
 int beam_poll(char* buf);

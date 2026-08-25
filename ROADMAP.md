@@ -305,3 +305,40 @@ implement. Same recipe, unexplored directions:
   UHCI-only ports, VBE mode fallback — but I'm parking it for later. The
   big prerequisites (own bootloader, 64-bit, AHCI, on-disk logging) are
   done now, so this is mostly a matter of picking a victim PC.
+
+- **Bluetooth controllers.** Checked the whole tree — there is genuinely
+  zero Bluetooth code today, not even a stub (the existing "hci"/"HCI"
+  hits are all USB/AHCI host-controller code, unrelated). This is a
+  from-scratch subsystem on the scale of the USB stack already built
+  (`src/uhci.c`, `src/xhci.c`, `src/usb.c`), not a small add-on, so it's
+  staged rather than attempted in one pass:
+
+  1. **HCI bring-up over a USB Bluetooth dongle.** Most Bluetooth
+     adapters present as a USB device (class 0xE0/0x01/0x01), so this
+     rides the existing UHCI/xHCI enumeration path — no new bus driver —
+     but needs a brand-new HCI command/event protocol layer on top (USB
+     control transfers for commands, one interrupt-IN endpoint for
+     events, bulk for ACL data — structurally different from the HID
+     report pipe `usb.c` already has). Milestone: `HCI_Reset` +
+     `HCI_Read_BD_ADDR` succeed — provable (log the adapter's address),
+     but not yet useful for anything.
+  2. **Discovery, pairing, and a transport channel.** Classic: inquiry,
+     Secure Simple Pairing (real elliptic-curve crypto for anything past
+     "Just Works"), L2CAP, and SDP to find the HID service's channel. BLE:
+     scanning, SMP pairing, and GATT service discovery instead. This is
+     the hardest, most protocol-heavy stage and the one most likely to
+     eat real time. Milestone: a paired device with an open channel —
+     still no input flowing yet.
+  3. **The HID profile itself.** Classic HID-over-L2CAP or BLE HOGP
+     (HID over GATT); report parsing is structurally similar to the
+     existing DS4 decode in `usb.c`. Feeds into the controller-assignment
+     system already built (`src/gamepad.c`'s per-source model,
+     `SYS_PAD_ASSIGN`, the launcher's CONTROLLERS screen) exactly like a
+     USB pad does today — that plumbing doesn't need to change, it just
+     gains a new kind of source. Milestone: a real Bluetooth controller
+     drives a player slot in a real game.
+
+  Wired USB (already fully working, DS4 verified) plus the controller-
+  assignment system covers multi-controller and local multiplayer today
+  without touching a radio at all — this is a "someday, and in that
+  order" list, not a blocker on anything else.

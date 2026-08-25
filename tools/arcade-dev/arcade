@@ -12,6 +12,8 @@ FAT32 root, so "shipping" a game is just deploying the volume image.
   arcade run [DIR]        deploy + boot QEMU with the volume
   arcade sprites          open the pixel-art sprite editor (browser)
   arcade levels           open the tilemap level editor (browser)
+  arcade builder          open the no-code game builder (browser + local
+                          build/deploy bridge — no main.c ever written)
 
 The tool lives inside the ArcadeOS repo and uses its cross toolchain
 (x86_64-elf-gcc) and SDK (build/libarcade.a). NOTE: a plain `make`
@@ -139,10 +141,19 @@ def cmd_levels(argv):
     webbrowser.open("file://" + page)
 
 
+def cmd_builder(argv):
+    """Starts the local build/deploy bridge and opens the builder site.
+    It serves the page AND the /build API on one origin (same-origin,
+    no CORS setup needed) and shells out to the same compiler
+    invocation `arcade build` uses — see builder_server.py."""
+    sh(["python3", os.path.join(TOOL_DIR, "builder_server.py"), *argv])
+
+
 def main():
     cmds = {"new": cmd_new, "build": cmd_build,
             "deploy": cmd_deploy, "run": cmd_run,
-            "sprites": cmd_sprites, "levels": cmd_levels}
+            "sprites": cmd_sprites, "levels": cmd_levels,
+            "builder": cmd_builder}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__.strip())
         sys.exit(0 if len(sys.argv) < 2 else 1)
